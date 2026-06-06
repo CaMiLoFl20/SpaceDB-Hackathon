@@ -205,37 +205,66 @@ function App() {
   const [shares, setShares] = useState('1');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!connected) return;
+    const timer = window.setInterval(() => {
+      setRefreshTick(tick => tick + 1);
+      setLastRefreshedAt(Date.now());
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [connected]);
 
   const account = accounts[0];
+
+  useEffect(() => {
+    if (!connected) return;
+    setRefreshTick(tick => tick + 1);
+    setLastRefreshedAt(Date.now());
+  }, [connected, account, holdings, stocks]);
   const me = directory.find(row => identity?.isEqual(row.owner));
 
   const sortedStocks = useMemo(
     () => [...stocks].sort((left, right) => left.symbol.localeCompare(right.symbol)),
-    [stocks]
+    [stocks, refreshTick]
   );
 
   const sortedLeaderboard = useMemo(
     () => sortLeaderboard(leaderboardRows),
-    [leaderboardRows]
+    [leaderboardRows, refreshTick]
   );
 
-  const sortedNews = useMemo(() => sortByTimeDesc(newsItems), [newsItems]);
-  const sortedMyTrades = useMemo(() => sortByTimeDesc(myTrades), [myTrades]);
+  const sortedNews = useMemo(() => sortByTimeDesc(newsItems), [newsItems, refreshTick]);
+  const sortedMyTrades = useMemo(() => sortByTimeDesc(myTrades), [myTrades, refreshTick]);
 
-  const cashBalance = account?.balanceCents ?? 0n;
-  const holdingsValue = useMemo(
-    () => computeHoldingsValue(holdings, stocks),
-    [holdings, stocks]
-  );
-  const portfolioValue = cashBalance + holdingsValue;
-  const returnLabel = formatReturn(portfolioValue, STARTING_CAPITAL_CENTS);
-  const returnPositive = portfolioValue >= STARTING_CAPITAL_CENTS;
+  const portfolioStats = useMemo(() => {
+    const cashBalance = account?.balanceCents ?? 0n;
+    const holdingsValue = computeHoldingsValue(holdings, stocks);
+    const portfolioValue = cashBalance + holdingsValue;
+    return {
+      cashBalance,
+      holdingsValue,
+      portfolioValue,
+      returnLabel: formatReturn(portfolioValue, STARTING_CAPITAL_CENTS),
+      returnPositive: portfolioValue >= STARTING_CAPITAL_CENTS,
+    };
+  }, [account, holdings, stocks, refreshTick]);
+
+  const {
+    cashBalance,
+    holdingsValue,
+    portfolioValue,
+    returnLabel,
+    returnPositive,
+  } = portfolioStats;
 
   const currentRank = useMemo(() => {
     if (!identity) return null;
     const index = sortedLeaderboard.findIndex(entry => identity.isEqual(entry.owner));
     return index >= 0 ? index + 1 : null;
-  }, [identity, sortedLeaderboard]);
+  }, [identity, sortedLeaderboard, refreshTick]);
 
   const activeSymbol =
     selectedSymbol || (sortedStocks.length > 0 ? sortedStocks[0].symbol : '');
@@ -415,6 +444,10 @@ function App() {
               Player performance
             </p>
             <h2 style={{ margin: '0.25rem 0 0', fontSize: '1.5rem' }}>{me.name}</h2>
+            <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#9ca3af' }}>
+              Metrics refresh every 5s · Last updated{' '}
+              {new Date(lastRefreshedAt).toLocaleTimeString()}
+            </p>
           </div>
           <div style={{ textAlign: 'right' }}>
             <p className="muted" style={{ margin: 0, color: '#9ca3af' }}>
