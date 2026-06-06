@@ -11,5 +11,8 @@ import {
 } from "spacetimedb";
 
 export default {
-  symbol: __t.option(__t.string()),
+  provider: __t.string(),
+  apiKey: __t.option(__t.string()),
+  model: __t.string(),
+  systemPrompt: __t.option(__t.string()),
 };

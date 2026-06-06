@@ -35,13 +35,15 @@ import {
 
 // Import all reducer arg schemas
 import BuyStockReducer from "./buy_stock_reducer";
-import GenerateDemoNewsReducer from "./generate_demo_news_reducer";
 import SeedMarketReducer from "./seed_market_reducer";
 import SellStockReducer from "./sell_stock_reducer";
+import SetGlobalAiConfigReducer from "./set_global_ai_config_reducer";
 import SetLlmConfigReducer from "./set_llm_config_reducer";
 import SetNameReducer from "./set_name_reducer";
 
 // Import all procedure arg schemas
+import * as GenerateDemoNewsProcedure from "./generate_demo_news_procedure";
+import * as GetGlobalAiConfigStatusProcedure from "./get_global_ai_config_status_procedure";
 import * as GetLlmConfigStatusProcedure from "./get_llm_config_status_procedure";
 
 // Import all table schema definitions
@@ -139,15 +141,17 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("buy_stock", BuyStockReducer),
-  __reducerSchema("generate_demo_news", GenerateDemoNewsReducer),
   __reducerSchema("seed_market", SeedMarketReducer),
   __reducerSchema("sell_stock", SellStockReducer),
+  __reducerSchema("set_global_ai_config", SetGlobalAiConfigReducer),
   __reducerSchema("set_llm_config", SetLlmConfigReducer),
   __reducerSchema("set_name", SetNameReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
 const proceduresSchema = __procedures(
+  __procedureSchema("generate_demo_news", GenerateDemoNewsProcedure.params, GenerateDemoNewsProcedure.returnType),
+  __procedureSchema("get_global_ai_config_status", GetGlobalAiConfigStatusProcedure.params, GetGlobalAiConfigStatusProcedure.returnType),
   __procedureSchema("get_llm_config_status", GetLlmConfigStatusProcedure.params, GetLlmConfigStatusProcedure.returnType),
 );
 

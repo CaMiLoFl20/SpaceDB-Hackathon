@@ -1,3 +1,4 @@
+import { ScheduleAt } from 'spacetimedb';
 import {
   schema,
   table,
@@ -5,15 +6,23 @@ import {
   SenderError,
   type ReducerCtx,
 } from 'spacetimedb/server';
-import { providers } from './llm';
+import {
+  callChat,
+  formatChatError,
+  providers,
+  type ChatMessage,
+} from './llm';
 
 const STARTING_BALANCE_CENTS = 1_000_000n;
 const MAX_NAME_LENGTH = 20;
 const MAX_U64 = (1n << 64n) - 1n;
 const MIN_PRICE_CENTS = 100n;
 const BASIS_POINTS_SCALE = 10_000n;
-const LARGE_HUMAN_BUY_SHARES = 500n;
-const LARGE_PRICE_INCREASE_BPS = 150n;
+const LARGE_HUMAN_TRADE_SHARES = 500n;
+const PROFIT_TAKING_MIN_BPS = 800n;
+const INSTITUTION_BULLISH_CHANCE = 70n;
+const GLOBAL_AI_CONFIG_ID = 'global';
+const MARKET_TICK_INTERVAL_MICROS = 30_000_000n;
 
 const AI_INSTITUTIONS = [
   'Titan Capital',
@@ -39,6 +48,20 @@ const llmConfigRow = {
   model: t.string(),
   systemPrompt: t.string().optional(),
   updatedAt: t.timestamp(),
+};
+
+const globalAiConfigRow = {
+  id: t.string().primaryKey(),
+  provider: t.string(),
+  apiKey: t.string(),
+  model: t.string(),
+  systemPrompt: t.string().optional(),
+  updatedAt: t.timestamp(),
+};
+
+const tickTimerRow = {
+  scheduledId: t.u64().primaryKey().autoInc(),
+  scheduledAt: t.scheduleAt(),
 };
 
 const stockRow = {
@@ -110,6 +133,17 @@ const leaderboardRow = t.object('LeaderboardRow', {
 });
 
 const llmConfig = table({ name: 'llm_config', public: false }, llmConfigRow);
+const globalAiConfig = table(
+  { name: 'global_ai_config', public: false },
+  globalAiConfigRow
+);
+const tickTimer = table(
+  {
+    name: 'tick_timer',
+    scheduled: (): any => market_tick,
+  },
+  tickTimerRow
+);
 const stock = table({ name: 'stock', public: true }, stockRow);
 const account = table({ name: 'account' }, accountRow);
 const holding = table({ name: 'holding' }, holdingRow);
@@ -123,6 +157,8 @@ const playerDirectory = table(
 
 const spacetimedb = schema({
   llmConfig,
+  globalAiConfig,
+  tickTimer,
   stock,
   account,
   holding,
@@ -315,6 +351,77 @@ function insertAiNews(
   });
 }
 
+function isStockUpAtLeastEightPercent(stockRow: StockRow): boolean {
+  return (
+    priceIncreaseBps(stockRow.previousPriceCents, stockRow.priceCents) >=
+    PROFIT_TAKING_MIN_BPS
+  );
+}
+
+function debugGenerateNews(message: string): void {
+  console.log(`[generate_demo_news] ${message}`);
+}
+
+function executeInstitutionalBuy(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  institution: string,
+  shares: bigint,
+  behavior:
+    | 'accumulation'
+    | 'momentum_buying'
+    | 'buy_the_dip'
+    | 'sector_rotation'
+): StockRow {
+  const updated = applyMarketActivity(ctx, stockRow, 'buy', shares, shares);
+  const copy = {
+    accumulation: {
+      headline: `${updated.symbol} Institutional Accumulation`,
+      body: `${institution} expanded institutional accumulation in ${updated.symbol}, adding ${shares.toString()} shares as unusual volume builds and retail buying pressure continues.`,
+    },
+    momentum_buying: {
+      headline: `${updated.symbol} Momentum Buying`,
+      body: `${institution} joined momentum buying in ${updated.symbol}, lifting ${shares.toString()} shares as price action attracts systematic flows.`,
+    },
+    buy_the_dip: {
+      headline: `${updated.symbol} Buy-The-Dip Support`,
+      body: `${institution} stepped in to buy the dip in ${updated.symbol}, purchasing ${shares.toString()} shares after a brief pullback drew institutional attention.`,
+    },
+    sector_rotation: {
+      headline: `${updated.symbol} Sector Rotation Inflow`,
+      body: `${institution} rotated capital into ${updated.symbol}, acquiring ${shares.toString()} shares as sector leadership shifts toward the name.`,
+    },
+  }[behavior];
+  insertAiNews(ctx, copy.headline, copy.body, updated.symbol);
+  return updated;
+}
+
+function executeInstitutionalSell(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  institution: string,
+  shares: bigint,
+  behavior: 'profit_taking' | 'reduce_exposure' | 'risk_off_selling'
+): StockRow {
+  const updated = applyMarketActivity(ctx, stockRow, 'sell', shares, shares);
+  const copy = {
+    profit_taking: {
+      headline: `${updated.symbol} Profit-Taking Wave`,
+      body: `${institution} executed AI-driven profit-taking in ${updated.symbol}, distributing ${shares.toString()} shares after an extended rally above recent reference levels.`,
+    },
+    reduce_exposure: {
+      headline: `${updated.symbol} Exposure Reduction`,
+      body: `${institution} reduced exposure to ${updated.symbol}, selling ${shares.toString()} shares as desks rebalance risk after unusual volume.`,
+    },
+    risk_off_selling: {
+      headline: `${updated.symbol} Risk-Off Selling`,
+      body: `${institution} moved risk-off in ${updated.symbol}, unloading ${shares.toString()} shares amid heavier selling pressure across the tape.`,
+    },
+  }[behavior];
+  insertAiNews(ctx, copy.headline, copy.body, updated.symbol);
+  return updated;
+}
+
 function applyMarketActivity(
   ctx: ModuleCtx,
   stockRow: StockRow,
@@ -341,56 +448,117 @@ function applyMarketActivity(
   return updated;
 }
 
-function maybeAiMomentumFollow(
+function reactInstitutionalToHumanBuy(
   ctx: ModuleCtx,
   stockRow: StockRow,
   humanShares: bigint
 ): StockRow {
-  if (humanShares < LARGE_HUMAN_BUY_SHARES) return stockRow;
-
   const seed = actionSeed(ctx, stockRow.symbol, humanShares, 1n);
-  if (!shouldAct(seed, 45n)) return stockRow;
+  const reacts =
+    humanShares >= LARGE_HUMAN_TRADE_SHARES ? shouldAct(seed, 78n) : shouldAct(seed, 52n);
+  if (!reacts) return stockRow;
 
   const institution = pickInstitution(seed);
-  const aiShares = deterministicRange(seed / 256n, 5_000n, 15_000n);
-  const updated = applyMarketActivity(ctx, stockRow, 'buy', aiShares, aiShares);
-
-  insertAiNews(
-    ctx,
-    `${updated.symbol} Institutional Follow-Through`,
-    `Unusual volume in ${updated.symbol} after retail buying pressure prompted ${institution} to join institutional accumulation with ${aiShares.toString()} shares.`,
-    updated.symbol
-  );
-
-  return updated;
+  const aiShares = deterministicRange(seed / 256n, 3_000n, 12_000n);
+  const behaviors = [
+    'accumulation',
+    'momentum_buying',
+    'sector_rotation',
+    'momentum_buying',
+  ] as const;
+  const behavior = behaviors[Number((seed / 8n) % BigInt(behaviors.length))]!;
+  return executeInstitutionalBuy(ctx, stockRow, institution, aiShares, behavior);
 }
 
-function maybeAiProfitTaking(
-  ctx: ModuleCtx,
-  stockRow: StockRow,
-  priceAtStart: bigint
-): StockRow {
-  const increaseBps = priceIncreaseBps(priceAtStart, stockRow.priceCents);
-  if (increaseBps < LARGE_PRICE_INCREASE_BPS) return stockRow;
+function maybeInstitutionalProfitTaking(ctx: ModuleCtx, stockRow: StockRow): StockRow {
+  if (!isStockUpAtLeastEightPercent(stockRow)) return stockRow;
 
   const seed = actionSeed(ctx, stockRow.symbol, stockRow.priceCents, 2n);
-  if (!shouldAct(seed, 40n)) return stockRow;
+  if (!shouldAct(seed, 22n)) return stockRow;
 
   const institution = pickInstitution(seed + 3n);
-  const aiShares = deterministicRange(seed / 16n, 3_000n, 12_000n);
-  const updated = applyMarketActivity(ctx, stockRow, 'sell', aiShares, aiShares);
+  const aiShares = deterministicRange(seed / 16n, 2_000n, 8_000n);
+  const behavior = seed % 3n === 0n ? 'reduce_exposure' : 'profit_taking';
+  return executeInstitutionalSell(ctx, stockRow, institution, aiShares, behavior);
+}
 
-  insertAiNews(
+function reactInstitutionalToHumanSell(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  humanShares: bigint
+): StockRow {
+  const seed = actionSeed(ctx, stockRow.symbol, humanShares, 3n);
+  const reacts =
+    humanShares >= LARGE_HUMAN_TRADE_SHARES ? shouldAct(seed, 72n) : shouldAct(seed, 45n);
+  if (!reacts) return stockRow;
+
+  const institution = pickInstitution(seed);
+  const aiShares = deterministicRange(seed / 64n, 2_500n, 10_000n);
+  const buyTheDip = shouldAct(seed + 1n, 68n);
+
+  if (buyTheDip) {
+    return executeInstitutionalBuy(ctx, stockRow, institution, aiShares, 'buy_the_dip');
+  }
+
+  if (!isStockUpAtLeastEightPercent(stockRow)) {
+    return executeInstitutionalBuy(ctx, stockRow, institution, aiShares, 'accumulation');
+  }
+
+  return executeInstitutionalSell(
     ctx,
-    `${updated.symbol} Profit-Taking Wave`,
-    `${institution} executed AI-driven profit-taking, selling ${aiShares.toString()} shares of ${updated.symbol} after a sharp rally and unusual volume.`,
-    updated.symbol
+    stockRow,
+    institution,
+    aiShares,
+    seed % 2n === 0n ? 'reduce_exposure' : 'risk_off_selling'
   );
-
-  return updated;
 }
 
 type SeedCtx = Pick<ModuleCtx, 'db' | 'timestamp'>;
+
+function getGlobalAiConfig(ctx: ModuleCtx) {
+  return ctx.db.globalAiConfig.id.find(GLOBAL_AI_CONFIG_ID);
+}
+
+function ensureMarketTickScheduled(ctx: SeedCtx): void {
+  const hasTimer = [...ctx.db.tickTimer.iter()].length > 0;
+  if (hasTimer) return;
+  ctx.db.tickTimer.insert({
+    scheduledId: 0n,
+    scheduledAt: ScheduleAt.interval(MARKET_TICK_INTERVAL_MICROS),
+  });
+}
+
+function runInstitutionalMarketEvent(ctx: ModuleCtx): void {
+  const stocks = [...ctx.db.stock.iter()];
+  if (stocks.length === 0) return;
+
+  const micros = ctx.timestamp.microsSinceUnixEpoch;
+  const seed = actionSeed(ctx, 'MARKET_TICK', micros, 99n);
+  const stockRow = stocks[Number(seed % BigInt(stocks.length))]!;
+  const institution = pickInstitution(seed);
+  const shares = deterministicRange(seed / 32n, 2_000n, 10_000n);
+  const roll = seed % 100n;
+
+  if (roll < INSTITUTION_BULLISH_CHANCE) {
+    const behaviors = [
+      'accumulation',
+      'momentum_buying',
+      'buy_the_dip',
+      'sector_rotation',
+    ] as const;
+    const behavior = behaviors[Number((seed / 11n) % BigInt(behaviors.length))]!;
+    executeInstitutionalBuy(ctx, stockRow, institution, shares, behavior);
+    return;
+  }
+
+  if (isStockUpAtLeastEightPercent(stockRow) && roll < 88n) {
+    const behavior = roll % 2n === 0n ? 'profit_taking' : 'reduce_exposure';
+    executeInstitutionalSell(ctx, stockRow, institution, shares, behavior);
+    return;
+  }
+
+  executeInstitutionalBuy(ctx, stockRow, institution, shares, 'accumulation');
+}
 
 function ensureMarketSeeded(ctx: SeedCtx): void {
   const now = ctx.timestamp;
@@ -422,10 +590,19 @@ function ensureMarketSeeded(ctx: SeedCtx): void {
 
 export const init = spacetimedb.init(ctx => {
   ensureMarketSeeded(ctx);
+  ensureMarketTickScheduled(ctx);
 });
+
+export const market_tick = spacetimedb.reducer(
+  { timer: tickTimer.rowType },
+  (ctx, _args) => {
+    runInstitutionalMarketEvent(ctx);
+  }
+);
 
 export const onConnect = spacetimedb.clientConnected(ctx => {
   ensureMarketSeeded(ctx);
+  ensureMarketTickScheduled(ctx);
 
   if (!ctx.db.account.owner.find(ctx.sender)) {
     ctx.db.account.insert({
@@ -547,6 +724,61 @@ export const get_llm_config_status = spacetimedb.procedure(
     })
 );
 
+export const set_global_ai_config = spacetimedb.reducer(
+  {
+    provider: t.string(),
+    apiKey: t.string().optional(),
+    model: t.string(),
+    systemPrompt: t.string().optional(),
+  },
+  (ctx, { provider, apiKey, model, systemPrompt }) => {
+    validateConfig(provider, model);
+
+    const existing = getGlobalAiConfig(ctx);
+    const nextApiKey = resolveApiKey(
+      existing?.provider,
+      existing?.apiKey,
+      provider,
+      apiKey
+    );
+
+    const row = {
+      id: GLOBAL_AI_CONFIG_ID,
+      provider,
+      apiKey: nextApiKey,
+      model,
+      systemPrompt,
+      updatedAt: ctx.timestamp,
+    };
+
+    if (existing) {
+      ctx.db.globalAiConfig.id.update(row);
+    } else {
+      ctx.db.globalAiConfig.insert(row);
+    }
+  }
+);
+
+export const get_global_ai_config_status = spacetimedb.procedure(
+  {},
+  t.object('GlobalAiConfigStatus', {
+    configured: t.bool(),
+    provider: t.string().optional(),
+    model: t.string().optional(),
+    systemPrompt: t.string().optional(),
+  }),
+  ctx =>
+    ctx.withTx(tx => {
+      const config = tx.db.globalAiConfig.id.find(GLOBAL_AI_CONFIG_ID);
+      return {
+        configured: config != null,
+        provider: config?.provider,
+        model: config?.model,
+        systemPrompt: config?.systemPrompt,
+      };
+    })
+);
+
 export const seed_market = spacetimedb.reducer({}, ctx => {
   ensureMarketSeeded(ctx);
 });
@@ -634,8 +866,8 @@ export const buy_stock = spacetimedb.reducer(
     );
 
     let currentStock = applyMarketActivity(ctx, stockRow, 'buy', shares, shares);
-    currentStock = maybeAiMomentumFollow(ctx, currentStock, shares);
-    maybeAiProfitTaking(ctx, currentStock, priceAtStart);
+    currentStock = reactInstitutionalToHumanBuy(ctx, currentStock, shares);
+    maybeInstitutionalProfitTaking(ctx, currentStock);
   }
 );
 
@@ -683,31 +915,312 @@ export const sell_stock = spacetimedb.reducer(
       totalCents
     );
 
-    applyMarketActivity(ctx, stockRow, 'sell', shares, shares);
+    const currentStock = applyMarketActivity(ctx, stockRow, 'sell', shares, shares);
+    reactInstitutionalToHumanSell(ctx, currentStock, shares);
   }
 );
 
-export const generate_demo_news = spacetimedb.reducer(
-  { symbol: t.string().optional() },
-  (ctx, { symbol }) => {
-    const trimmed = symbol?.trim().toUpperCase();
-    const linkedSymbol =
-      trimmed && trimmed.length > 0 ? requireStock(ctx, trimmed).symbol : undefined;
+function formatCentsAsDollars(cents: bigint): string {
+  const dollars = cents / 100n;
+  const remainder = (cents % 100n).toString().padStart(2, '0');
+  return `${dollars.toLocaleString()}.${remainder}`;
+}
 
-    const headline = linkedSymbol
-      ? `${linkedSymbol} draws trader attention`
-      : 'Broad market activity continues';
-    const body = linkedSymbol
-      ? `Traders are watching ${linkedSymbol} after a burst of activity on the exchange floor.`
-      : 'Participants are active across multiple sectors as the session continues.';
+function formatSignedPercentChange(current: bigint, previous: bigint): string {
+  if (previous === 0n) return '0.00%';
+  const bps = priceIncreaseBps(previous, current);
+  const pct = Number(bps) / 100;
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(2)}%`;
+}
 
-    ctx.db.marketNews.insert({
-      id: 0n,
-      headline,
-      body,
-      symbol: linkedSymbol,
-      createdAt: ctx.timestamp,
-      isAiGenerated: false,
+function resolveOptionalSymbol(symbol: string | undefined): string | undefined {
+  const trimmed = symbol?.trim().toUpperCase();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function buildFallbackNews(
+  linkedSymbol: string | undefined,
+  stockRow: StockRow | undefined
+): { headline: string; body: string } {
+  if (linkedSymbol && stockRow) {
+    const change = formatSignedPercentChange(
+      stockRow.priceCents,
+      stockRow.previousPriceCents
+    );
+    return {
+      headline: `Unusual volume detected in ${linkedSymbol}`,
+      body: `Retail buying pressure has lifted ${linkedSymbol} to $${formatCentsAsDollars(stockRow.priceCents)} (${change}) on ${stockRow.volume.toString()} shares traded. Institutional observers are monitoring the move.`,
+    };
+  }
+
+  return {
+    headline: 'Broad market activity continues',
+    body: 'Participants remain active across multiple sectors. Unusual volume and institutional flows are shaping price action across the tape.',
+  };
+}
+
+function insertMarketNewsRow(
+  ctx: ModuleCtx,
+  headline: string,
+  body: string,
+  symbol: string | undefined,
+  isAiGenerated: boolean
+): void {
+  ctx.db.marketNews.insert({
+    id: 0n,
+    headline,
+    body,
+    symbol,
+    createdAt: ctx.timestamp,
+    isAiGenerated,
+  });
+}
+
+function collectRecentMarketActivity(ctx: ModuleCtx, limit: number): string[] {
+  const rows = [...ctx.db.marketNews.iter()]
+    .sort((left, right) => {
+      const diff =
+        right.createdAt.microsSinceUnixEpoch - left.createdAt.microsSinceUnixEpoch;
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    })
+    .slice(0, limit);
+
+  return rows.map(row => {
+    const symbol = row.symbol ?? 'MARKET';
+    return `${symbol}: ${row.headline}`;
+  });
+}
+
+function collectInstitutionalContext(ctx: ModuleCtx, limit: number): string[] {
+  const rows = [...ctx.db.marketNews.iter()]
+    .filter(row => row.headline.startsWith('AI Market Mover:'))
+    .sort((left, right) => {
+      const diff =
+        right.createdAt.microsSinceUnixEpoch - left.createdAt.microsSinceUnixEpoch;
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    })
+    .slice(0, limit);
+
+  return rows.map(row => row.body);
+}
+
+function buildNewsPrompt(
+  linkedSymbol: string | undefined,
+  stockRow: StockRow | undefined,
+  recentActivity: string[],
+  institutionalContext: string[],
+  systemPrompt: string | undefined
+): ChatMessage[] {
+  const lines = [
+    'Write one realistic market news item for a multiplayer stock simulator.',
+    'Return JSON only with keys "headline" and "body".',
+    'Never name individual retail traders.',
+    'Use anonymized market language such as retail buying pressure, unusual volume, institutional accumulation, or AI-driven profit-taking.',
+  ];
+
+  if (linkedSymbol && stockRow) {
+    lines.push(
+      '',
+      `Symbol: ${linkedSymbol}`,
+      `Company: ${stockRow.name}`,
+      `Current price: $${formatCentsAsDollars(stockRow.priceCents)}`,
+      `Previous price: $${formatCentsAsDollars(stockRow.previousPriceCents)}`,
+      `Price change: ${formatSignedPercentChange(stockRow.priceCents, stockRow.previousPriceCents)}`,
+      `Volume: ${stockRow.volume.toString()} shares`
+    );
+  } else {
+    lines.push('', 'Scope: broad market overview across all listed stocks.');
+  }
+
+  if (recentActivity.length > 0) {
+    lines.push('', 'Recent market activity:', ...recentActivity.map(item => `- ${item}`));
+  }
+
+  if (institutionalContext.length > 0) {
+    lines.push(
+      '',
+      'Institutional AI market mover context:',
+      ...institutionalContext.map(item => `- ${item}`)
+    );
+  }
+
+  const messages: ChatMessage[] = [];
+  if (systemPrompt && systemPrompt.trim().length > 0) {
+    messages.push({ role: 'system', content: systemPrompt });
+  } else {
+    messages.push({
+      role: 'system',
+      content:
+        'You are a financial news desk writing concise, realistic market headlines for a simulated exchange.',
     });
+  }
+  messages.push({ role: 'user', content: lines.join('\n') });
+  return messages;
+}
+
+function unwrapOptionalString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && 'tag' in value) {
+    const option = value as { tag: string; value?: string };
+    return option.tag === 'some' ? option.value : undefined;
+  }
+  return undefined;
+}
+
+function parseLlmNewsResponse(text: string): { headline: string; body: string } {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1]?.trim() ?? trimmed;
+
+  try {
+    const parsed = JSON.parse(candidate) as { headline?: unknown; body?: unknown };
+    if (
+      typeof parsed.headline === 'string' &&
+      typeof parsed.body === 'string' &&
+      parsed.headline.trim().length > 0 &&
+      parsed.body.trim().length > 0
+    ) {
+      return {
+        headline: parsed.headline.trim(),
+        body: parsed.body.trim(),
+      };
+    }
+  } catch {
+    // Fall through to line-based parsing.
+  }
+
+  const headlineMatch = candidate.match(/"headline"\s*:\s*"([^"]+)"/i);
+  const bodyMatch = candidate.match(/"body"\s*:\s*"([^"]+)"/i);
+  if (headlineMatch && bodyMatch) {
+    return {
+      headline: headlineMatch[1]!.trim(),
+      body: bodyMatch[1]!.trim(),
+    };
+  }
+
+  const lines = candidate
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+  if (lines.length >= 2) {
+    return {
+      headline: lines[0]!.replace(/^#+\s*/, ''),
+      body: lines.slice(1).join('\n'),
+    };
+  }
+
+  return {
+    headline: 'Market bulletin',
+    body: candidate,
+  };
+}
+
+export const generate_demo_news = spacetimedb.procedure(
+  { symbol: t.string().optional() },
+  t.unit(),
+  (ctx, { symbol }) => {
+    const setup = ctx.withTx(tx => {
+      const linkedSymbol = resolveOptionalSymbol(symbol);
+      const stockRow = linkedSymbol
+        ? tx.db.stock.symbol.find(linkedSymbol) ?? undefined
+        : undefined;
+
+      if (linkedSymbol && !stockRow) {
+        senderError(`Unknown stock symbol: ${linkedSymbol}`);
+      }
+
+      const globalConfig = tx.db.globalAiConfig.id.find(GLOBAL_AI_CONFIG_ID);
+      const legacyUserConfig = tx.db.llmConfig.owner.find(tx.sender);
+      const recentActivity = collectRecentMarketActivity(tx, 5);
+      const institutionalContext = collectInstitutionalContext(tx, 3);
+
+      return {
+        linkedSymbol,
+        stockRow,
+        globalConfig,
+        legacyUserConfig,
+        recentActivity,
+        institutionalContext,
+      };
+    });
+
+    const fallback = buildFallbackNews(setup.linkedSymbol, setup.stockRow);
+    const config = setup.globalConfig;
+
+    debugGenerateNews(`llm_config found: ${setup.legacyUserConfig != null}`);
+    debugGenerateNews(`global_ai_config found: ${config != null}`);
+
+    if (!config) {
+      debugGenerateNews('provider: (none)');
+      debugGenerateNews('model: (none)');
+      debugGenerateNews('callChat invoked: false');
+      debugGenerateNews('using fallback news: true');
+      ctx.withTx(tx => {
+        insertMarketNewsRow(
+          tx,
+          fallback.headline,
+          fallback.body,
+          setup.linkedSymbol,
+          false
+        );
+      });
+      return {};
+    }
+
+    debugGenerateNews(`provider: ${config.provider}`);
+    debugGenerateNews(`model: ${config.model}`);
+
+    validateProvider(config.provider);
+    const provider = providers[config.provider];
+    if (!provider) senderError(`llm.unknown_provider:${config.provider}`);
+
+    const messages = buildNewsPrompt(
+      setup.linkedSymbol,
+      setup.stockRow,
+      setup.recentActivity,
+      setup.institutionalContext,
+      unwrapOptionalString(config.systemPrompt)
+    );
+
+    debugGenerateNews('callChat invoked: true');
+    const result = callChat(ctx.http, provider, {
+      apiKey: config.apiKey,
+      model: config.model,
+      messages,
+    });
+
+    if (!result.ok) {
+      debugGenerateNews('callChat succeeded: false');
+      debugGenerateNews(`callChat error: ${formatChatError(result.error)}`);
+      debugGenerateNews('using fallback news: true');
+      ctx.withTx(tx => {
+        insertMarketNewsRow(
+          tx,
+          fallback.headline,
+          fallback.body,
+          setup.linkedSymbol,
+          false
+        );
+      });
+      return {};
+    }
+
+    debugGenerateNews('callChat succeeded: true');
+    debugGenerateNews('using fallback news: false');
+    const parsed = parseLlmNewsResponse(result.response.text);
+
+    ctx.withTx(tx => {
+      insertMarketNewsRow(
+        tx,
+        parsed.headline,
+        parsed.body,
+        setup.linkedSymbol,
+        true
+      );
+    });
+
+    return {};
   }
 );

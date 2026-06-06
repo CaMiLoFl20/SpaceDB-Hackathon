@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Identity } from 'spacetimedb';
-import { useReducer, useSpacetimeDB, useTable } from 'spacetimedb/react';
+import { useProcedure, useReducer, useSpacetimeDB, useTable } from 'spacetimedb/react';
 import './App.css';
-import { reducers, tables } from './module_bindings';
+import { procedures, reducers, tables } from './module_bindings';
 
 const STARTING_CAPITAL_CENTS = 1_000_000n;
 const GAIN_COLOR = '#15803d';
 const LOSS_COLOR = '#b91c1c';
+const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+
+function defaultModel(provider: string) {
+  return provider === 'openai' ? DEFAULT_OPENAI_MODEL : DEFAULT_OPENROUTER_MODEL;
+}
 
 const AI_INSTITUTIONS = [
   'Titan Capital',
@@ -113,6 +119,112 @@ function inferAiDirection(headline: string, body: string): string {
   return 'Institutional activity';
 }
 
+function AiSettingsModal({
+  apiKey,
+  configured,
+  error,
+  loading,
+  model,
+  onApiKeyChange,
+  onClose,
+  onModelChange,
+  onProviderChange,
+  onSave,
+  onSystemPromptChange,
+  open,
+  provider,
+  saving,
+  systemPrompt,
+}: {
+  apiKey: string;
+  configured: boolean;
+  error: string;
+  loading: boolean;
+  model: string;
+  onApiKeyChange: (value: string) => void;
+  onClose: () => void;
+  onModelChange: (value: string) => void;
+  onProviderChange: (value: string) => void;
+  onSave: () => void;
+  onSystemPromptChange: (value: string) => void;
+  open: boolean;
+  provider: string;
+  saving: boolean;
+  systemPrompt: string;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section
+        className="config-modal"
+        onClick={event => event.stopPropagation()}
+      >
+        <header>
+          <h2>AI Settings</h2>
+          <button onClick={onClose} type="button">
+            Close
+          </button>
+        </header>
+        <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>
+          {configured
+            ? 'Global AI configured for all players. Leave API key blank to keep the saved key.'
+            : 'Set the global OpenAI or OpenRouter key once for everyone.'}
+        </p>
+        {error && <p style={{ color: LOSS_COLOR, margin: 0 }}>{error}</p>}
+        <label>
+          Provider
+          <select
+            disabled={loading || saving}
+            onChange={event => onProviderChange(event.target.value)}
+            value={provider}
+          >
+            <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </label>
+        <label>
+          API key
+          <input
+            autoComplete="off"
+            disabled={loading || saving}
+            onChange={event => onApiKeyChange(event.target.value)}
+            placeholder={configured ? 'Leave blank to keep saved key' : 'sk-...'}
+            type="password"
+            value={apiKey}
+          />
+        </label>
+        <label>
+          Model
+          <input
+            disabled={loading || saving}
+            onChange={event => onModelChange(event.target.value)}
+            placeholder={defaultModel(provider)}
+            value={model}
+          />
+        </label>
+        <label>
+          System prompt (optional)
+          <textarea
+            disabled={loading || saving}
+            onChange={event => onSystemPromptChange(event.target.value)}
+            rows={3}
+            value={systemPrompt}
+          />
+        </label>
+        <footer>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>
+            {loading ? 'Loading status...' : configured ? 'Configured' : 'Not configured'}
+          </span>
+          <button disabled={loading || saving} onClick={onSave} type="button">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function NameForm({
   initialName = '',
   onSubmit,
@@ -184,10 +296,12 @@ function App() {
   const [directory] = useTable(tables.playerDirectory);
 
   const setName = useReducer(reducers.setName);
+  const setGlobalAiConfig = useReducer(reducers.setGlobalAiConfig);
   const seedMarket = useReducer(reducers.seedMarket);
   const buyStock = useReducer(reducers.buyStock);
   const sellStock = useReducer(reducers.sellStock);
-  const generateDemoNews = useReducer(reducers.generateDemoNews);
+  const generateDemoNews = useProcedure(procedures.generateDemoNews);
+  const getGlobalAiConfigStatus = useProcedure(procedures.getGlobalAiConfigStatus);
 
   const seedAttempted = useRef(false);
 
@@ -205,6 +319,17 @@ function App() {
   const [shares, setShares] = useState('1');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [globalAiConfigured, setGlobalAiConfigured] = useState(false);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(false);
+  const [aiSettingsSaving, setAiSettingsSaving] = useState(false);
+  const [aiSettingsError, setAiSettingsError] = useState('');
+  const [aiDraft, setAiDraft] = useState({
+    provider: 'openai',
+    apiKey: '',
+    model: DEFAULT_OPENAI_MODEL,
+    systemPrompt: '',
+  });
   const [refreshTick, setRefreshTick] = useState(0);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(() => Date.now());
 
@@ -269,6 +394,71 @@ function App() {
   const activeSymbol =
     selectedSymbol || (sortedStocks.length > 0 ? sortedStocks[0].symbol : '');
 
+  const loadAiSettings = async () => {
+    setAiSettingsLoading(true);
+    setAiSettingsError('');
+    try {
+      const status = await getGlobalAiConfigStatus();
+      const provider = optionalString(status.provider) ?? 'openai';
+      setGlobalAiConfigured(status.configured);
+      setAiDraft({
+        provider,
+        apiKey: '',
+        model: optionalString(status.model) ?? defaultModel(provider),
+        systemPrompt: optionalString(status.systemPrompt) ?? '',
+      });
+    } catch (caught) {
+      setAiSettingsError(errorMessage(caught));
+    } finally {
+      setAiSettingsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!connected) return;
+    getGlobalAiConfigStatus()
+      .then(status => setGlobalAiConfigured(status.configured))
+      .catch(() => {});
+  }, [connected, getGlobalAiConfigStatus]);
+
+  useEffect(() => {
+    if (!connected || !aiSettingsOpen) return;
+    void loadAiSettings();
+  }, [connected, aiSettingsOpen]);
+
+  const saveGlobalAiConfig = async () => {
+    const trimmedKey = aiDraft.apiKey.trim();
+    if (!globalAiConfigured && trimmedKey.length === 0) {
+      setAiSettingsError('API key is required.');
+      return;
+    }
+    if (aiDraft.model.trim().length === 0) {
+      setAiSettingsError('Model is required.');
+      return;
+    }
+
+    setAiSettingsSaving(true);
+    setAiSettingsError('');
+    try {
+      await setGlobalAiConfig({
+        provider: aiDraft.provider,
+        apiKey: trimmedKey.length > 0 ? trimmedKey : undefined,
+        model: aiDraft.model.trim(),
+        systemPrompt:
+          aiDraft.systemPrompt.trim().length > 0
+            ? aiDraft.systemPrompt.trim()
+            : undefined,
+      });
+      setGlobalAiConfigured(true);
+      setAiDraft(draft => ({ ...draft, apiKey: '' }));
+      setAiSettingsOpen(false);
+    } catch (caught) {
+      setAiSettingsError(errorMessage(caught));
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  };
+
   const saveName = async (name: string) => {
     setError('');
     try {
@@ -309,9 +499,7 @@ function App() {
     setError('');
     setSubmitting(true);
     try {
-      await generateDemoNews({
-        symbol: activeSymbol ? activeSymbol : undefined,
-      });
+      await generateDemoNews({ symbol: activeSymbol || undefined });
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -393,6 +581,9 @@ function App() {
           <span className={`status ${connected ? 'online' : 'offline'}`}>
             {connected ? 'Connected' : 'Disconnected'}
           </span>
+          <button onClick={() => setAiSettingsOpen(true)} type="button">
+            AI Settings {globalAiConfigured ? '✓' : ''}
+          </button>
           {editingName ? (
             <NameForm initialName={me.name} onSubmit={saveName} />
           ) : (
@@ -405,6 +596,32 @@ function App() {
           )}
         </div>
       </header>
+
+      <AiSettingsModal
+        apiKey={aiDraft.apiKey}
+        configured={globalAiConfigured}
+        error={aiSettingsError}
+        loading={aiSettingsLoading}
+        model={aiDraft.model}
+        onApiKeyChange={value => setAiDraft(draft => ({ ...draft, apiKey: value }))}
+        onClose={() => setAiSettingsOpen(false)}
+        onModelChange={value => setAiDraft(draft => ({ ...draft, model: value }))}
+        onProviderChange={value =>
+          setAiDraft(draft => ({
+            ...draft,
+            provider: value,
+            model: defaultModel(value),
+          }))
+        }
+        onSave={() => void saveGlobalAiConfig()}
+        onSystemPromptChange={value =>
+          setAiDraft(draft => ({ ...draft, systemPrompt: value }))
+        }
+        open={aiSettingsOpen}
+        provider={aiDraft.provider}
+        saving={aiSettingsSaving}
+        systemPrompt={aiDraft.systemPrompt}
+      />
 
       {error && (
         <p
@@ -732,7 +949,7 @@ function App() {
           >
             <h2 style={{ margin: 0 }}>Market activity</h2>
             <button disabled={submitting} onClick={postDemoNews} type="button">
-              Demo headline
+              {globalAiConfigured ? 'Generate news' : 'Demo headline'}
             </button>
           </div>
           <p className="muted" style={{ fontSize: '0.85rem', margin: '0.5rem 0 0' }}>

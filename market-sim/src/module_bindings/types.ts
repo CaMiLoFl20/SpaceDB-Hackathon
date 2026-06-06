@@ -17,6 +17,24 @@ export const Account = __t.object("Account", {
 });
 export type Account = __Infer<typeof Account>;
 
+export const GlobalAiConfig = __t.object("GlobalAiConfig", {
+  id: __t.string(),
+  provider: __t.string(),
+  apiKey: __t.string(),
+  model: __t.string(),
+  systemPrompt: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+});
+export type GlobalAiConfig = __Infer<typeof GlobalAiConfig>;
+
+export const GlobalAiConfigStatus = __t.object("GlobalAiConfigStatus", {
+  configured: __t.bool(),
+  provider: __t.option(__t.string()),
+  model: __t.option(__t.string()),
+  systemPrompt: __t.option(__t.string()),
+});
+export type GlobalAiConfigStatus = __Infer<typeof GlobalAiConfigStatus>;
+
 export const Holding = __t.object("Holding", {
   id: __t.u64(),
   owner: __t.identity(),
@@ -103,6 +121,12 @@ export const Stock = __t.object("Stock", {
   updatedAt: __t.timestamp(),
 });
 export type Stock = __Infer<typeof Stock>;
+
+export const TickTimer = __t.object("TickTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type TickTimer = __Infer<typeof TickTimer>;
 
 export const TradeLedger = __t.object("TradeLedger", {
   id: __t.u64(),
