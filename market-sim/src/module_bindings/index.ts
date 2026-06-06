@@ -45,15 +45,22 @@ import SetNameReducer from "./set_name_reducer";
 import * as GenerateDemoNewsProcedure from "./generate_demo_news_procedure";
 import * as GetGlobalAiConfigStatusProcedure from "./get_global_ai_config_status_procedure";
 import * as GetLlmConfigStatusProcedure from "./get_llm_config_status_procedure";
+import * as TestGlobalAiConnectionProcedure from "./test_global_ai_connection_procedure";
 
 // Import all table schema definitions
+import AiTraderLogRow from "./ai_trader_log_table";
+import AiTraderMindsRow from "./ai_trader_minds_table";
 import LeaderboardRow from "./leaderboard_table";
 import MarketNewsRow from "./market_news_table";
+import MarketStocksRow from "./market_stocks_table";
 import MyAccountRow from "./my_account_table";
 import MyHoldingsRow from "./my_holdings_table";
+import MyPlayerRow from "./my_player_table";
+import MyPortfolioHistoryRow from "./my_portfolio_history_table";
 import MyTradesRow from "./my_trades_table";
 import PlayerDirectoryRow from "./player_directory_table";
 import RecentTradeRow from "./recent_trade_table";
+import RecentMarketNewsRow from "./recent_market_news_table";
 import StockRow from "./stock_table";
 
 /** Type-only namespace exports for generated type groups. */
@@ -63,6 +70,9 @@ const tablesSchema = __schema({
   marketNews: __table({
     name: 'market_news',
     indexes: [
+      { accessor: 'createdAt', name: 'market_news_created_at_idx_btree', algorithm: 'btree', columns: [
+        'createdAt',
+      ] },
       { accessor: 'id', name: 'market_news_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
@@ -74,6 +84,9 @@ const tablesSchema = __schema({
   playerDirectory: __table({
     name: 'player_directory',
     indexes: [
+      { accessor: 'name', name: 'player_directory_name_idx_btree', algorithm: 'btree', columns: [
+        'name',
+      ] },
       { accessor: 'nameKey', name: 'player_directory_name_key_idx_btree', algorithm: 'btree', columns: [
         'nameKey',
       ] },
@@ -103,11 +116,28 @@ const tablesSchema = __schema({
       { accessor: 'symbol', name: 'stock_symbol_idx_btree', algorithm: 'btree', columns: [
         'symbol',
       ] },
+      { accessor: 'updatedAt', name: 'stock_updated_at_idx_btree', algorithm: 'btree', columns: [
+        'updatedAt',
+      ] },
     ],
     constraints: [
       { name: 'stock_symbol_key', constraint: 'unique', columns: ['symbol'] },
     ],
   }, StockRow),
+  ai_trader_log: __table({
+    name: 'ai_trader_log',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, AiTraderLogRow),
+  ai_trader_minds: __table({
+    name: 'ai_trader_minds',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, AiTraderMindsRow),
   leaderboard: __table({
     name: 'leaderboard',
     indexes: [
@@ -115,6 +145,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, LeaderboardRow),
+  market_stocks: __table({
+    name: 'market_stocks',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MarketStocksRow),
   my_account: __table({
     name: 'my_account',
     indexes: [
@@ -129,6 +166,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyHoldingsRow),
+  my_player: __table({
+    name: 'my_player',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyPlayerRow),
+  my_portfolio_history: __table({
+    name: 'my_portfolio_history',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyPortfolioHistoryRow),
   my_trades: __table({
     name: 'my_trades',
     indexes: [
@@ -136,6 +187,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyTradesRow),
+  recent_market_news: __table({
+    name: 'recent_market_news',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, RecentMarketNewsRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
@@ -153,6 +211,7 @@ const proceduresSchema = __procedures(
   __procedureSchema("generate_demo_news", GenerateDemoNewsProcedure.params, GenerateDemoNewsProcedure.returnType),
   __procedureSchema("get_global_ai_config_status", GetGlobalAiConfigStatusProcedure.params, GetGlobalAiConfigStatusProcedure.returnType),
   __procedureSchema("get_llm_config_status", GetLlmConfigStatusProcedure.params, GetLlmConfigStatusProcedure.returnType),
+  __procedureSchema("test_global_ai_connection", TestGlobalAiConnectionProcedure.params, TestGlobalAiConnectionProcedure.returnType),
 );
 
 /** The remote SpacetimeDB module schema, both runtime and type information. */

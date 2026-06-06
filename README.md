@@ -1,46 +1,43 @@
 # SpacetimeDB Hackathon
 
-A collection of SpacetimeDB experiments built for the hackathon. The main project is **Market Sim** — a multiplayer stock market simulator with AI institutions and LLM-generated market news.
+Multiplayer stock market simulator on SpacetimeDB — trade against friends and two LLM-powered AI bots (Nova & Pulse).
 
-## Projects
-
-| Project | Description |
-|---------|-------------|
-| [`market-sim/`](./market-sim/) | Real-time stock trading game on SpacetimeDB with institutional market movers and optional OpenAI/OpenRouter news generation |
-
-## Market Sim (quick start)
+## Quick start (teammates)
 
 ```bash
-cd market-sim
-npm install
-cd spacetimedb && npm install && cd ..
-
-# Local development (starts SpacetimeDB, publishes module, generates bindings, runs Vite)
-spacetime dev
-
-# Or run against the hosted database on maincloud
+git clone https://github.com/CaMiLoFl20/SpaceDB-Hackathon.git
+cd SpaceDB-Hackathon/market-sim
+npm install && cd spacetimedb && npm install && cd ..
+cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173), pick a nickname, and start trading.
+Open [http://localhost:5173](http://localhost:5173).
 
-See [`market-sim/README.md`](./market-sim/README.md) for full setup, architecture, and deployment instructions.
+Everyone shares the hosted database **`market-sim-69q12`** on maincloud — same market, leaderboard, and bots in real time.
+
+Full docs: [`market-sim/README.md`](./market-sim/README.md)
 
 ## Stack
 
-- **SpacetimeDB 2.4** — server-side module (TypeScript → WASM)
-- **React 18 + Vite 7** — client dashboard
-- **OpenAI / OpenRouter** — optional LLM for demo news headlines
+- **SpacetimeDB 2.4** — TypeScript module (server)
+- **React 18 + Vite 7** — trading dashboard
+- **OpenAI** — optional LLM for bot decisions and market news
 
-## Hosted database
+## Repo layout
 
-The demo is published to SpacetimeDB maincloud as `market-sim-69q12`. Configure the client with:
+| Path | Description |
+|------|-------------|
+| [`market-sim/`](./market-sim/) | Main app (frontend + SpacetimeDB module) |
 
-```bash
-VITE_SPACETIMEDB_HOST=wss://maincloud.spacetimedb.com
-VITE_SPACETIMEDB_DB_NAME=market-sim-69q12
-```
+## Shared database
+
+- **Host:** `https://maincloud.spacetimedb.com`
+- **Name:** `market-sim-69q12`
+- **Dashboard:** https://spacetimedb.com/market-sim-69q12
+
+Set the OpenAI API key once via **AI Settings** in the app (stored on server, not in git).
 
 ## License
 
-Hackathon / experiment project — use and modify freely.
+Hackathon / experiment — use and modify freely.

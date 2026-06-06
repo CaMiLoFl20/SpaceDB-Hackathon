@@ -1,122 +1,126 @@
 # Market Sim
 
-A multiplayer stock market simulator built on [SpacetimeDB](https://spacetimedb.com). Trade top US tech stocks, compete on a public leaderboard, and watch AI institutions move the market. Optional LLM integration generates contextual market news from recent activity.
+A multiplayer stock market simulator built on [SpacetimeDB](https://spacetimedb.com). Trade top US tech stocks, compete on a public leaderboard, and watch two AI traders (Nova & Pulse) battle each other and human players.
 
 ## Features
 
-- **Live trading** — Buy and sell NVDA, AAPL, GOOGL, MSFT, and AMZN with price impact based on order size
-- **$10,000 starting capital** — Each player gets a fresh account on first connect
-- **Private trades** — Your trade history is visible only to you; human trader names are never shown publicly
-- **Public leaderboard** — Ranked by estimated portfolio value (cash + holdings at current prices)
-- **AI institutions** — Titan Capital, Northbridge Quant, Atlas Pension, Helios Market Making, and Sentinel Asset Management react to human trades and run on a 30-second market tick
-- **Market news** — Institutional moves publish AI Market Mover headlines; optional LLM-generated demo news via OpenAI or OpenRouter
-- **Global AI settings** — One shared LLM config for demo news (set via the AI Settings panel)
+- **Live trading** — Buy and sell NVDA, AAPL, GOOGL, MSFT, and AMZN; prices move with order size
+- **$10,000 starting capital** — Fresh account on first connect
+- **Private trades** — Your history is only visible to you
+- **Public leaderboard** — Ranked by portfolio value (cash + holdings)
+- **AI trader bots** — Nova AI (aggressive) and Pulse AI (conservative) trade every 30s
+- **LLM-powered bots** — When OpenAI is configured, bots read the market, remember past moves, and decide buy/sell/hold
+- **AI trader log** — Live console showing bot trades and reasoning
+- **Market news** — Generate AI headlines via OpenAI/OpenRouter (optional)
+- **Portfolio chart** — 24h portfolio history
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+
 - [SpacetimeDB CLI](https://spacetimedb.com/install) 2.4+
-- (Optional) OpenAI or OpenRouter API key for LLM-generated news
+- (Optional) OpenAI or OpenRouter API key for LLM news and AI trader decisions
 
-## Quick start (local)
+## Working together (teammate setup)
+
+Everyone connects to the **same hosted database** so you see the same market, leaderboard, and bots.
 
 ```bash
+git clone https://github.com/CaMiLoFl20/SpaceDB-Hackathon.git
+cd SpaceDB-Hackathon/market-sim
+
 npm install
 cd spacetimedb && npm install && cd ..
 
-# Starts local SpacetimeDB, publishes module, generates bindings, runs Vite
-spacetime dev
-```
-
-Open [http://localhost:5173](http://localhost:5173).
-
-## Quick start (maincloud)
-
-Connect to the hosted demo database:
-
-```bash
-# .env.local (or export before npm run dev)
-VITE_SPACETIMEDB_HOST=wss://maincloud.spacetimedb.com
-VITE_SPACETIMEDB_DB_NAME=market-sim-69q12
-```
-
-```bash
-npm install
+cp .env.example .env.local   # points at shared maincloud DB
 npm run dev
 ```
 
-Publish module updates:
+Open [http://localhost:5173](http://localhost:5173), pick a nickname, and trade.
+
+### Shared database
+
+| Setting | Value |
+|---------|-------|
+| Host | `https://maincloud.spacetimedb.com` |
+| Database | `market-sim-69q12` |
+| Dashboard | https://spacetimedb.com/market-sim-69q12 |
+
+### API key (one per team)
+
+The OpenAI key lives in the **server** (`global_ai_config` table), not in git.
+
+1. Open the app → **AI Settings**
+2. Paste your OpenAI key and save
+3. Confirm **OpenAI: connected** in the header
+
+Only one global key is needed for the whole team on the shared DB. Do not commit keys to the repo.
+
+### Publishing backend changes
+
+When you change `spacetimedb/src/`, publish so everyone gets the same logic:
 
 ```bash
 spacetime publish --module-path spacetimedb --server maincloud -y market-sim-69q12
 ```
 
-Regenerate client bindings after server schema changes:
+Then regenerate client bindings if schema changed:
 
 ```bash
 npm run spacetime:generate
 ```
 
-## AI news configuration
+**Before publishing:** run `cd spacetimedb && npm run build` locally to catch errors.
 
-1. Open **AI Settings** in the dashboard
-2. Choose `openai` or `openrouter`
-3. Enter an API key and model (defaults: `gpt-4o-mini` for OpenAI, `openai/gpt-4o-mini` for OpenRouter)
-4. Click **Generate news** to run the `generate_demo_news` procedure
+### Git workflow
 
-If no global config is set, or the LLM call fails (e.g. quota exceeded), the server falls back to deterministic template headlines. Server logs include debug lines prefixed with `[generate_demo_news]` — view them with:
+- `main` — stable shared version
+- Use feature branches and PRs for larger changes
+- Never commit `.env.local` (gitignored)
+
+## Quick start (local SpacetimeDB)
+
+Run your own isolated database instead of maincloud:
 
 ```bash
-spacetime logs market-sim-69q12 -f
+npm install
+cd spacetimedb && npm install && cd ..
+spacetime dev
 ```
 
-API keys are stored in the `global_ai_config` table on the server. They are never returned to clients through subscriptions or status procedures. Use keys appropriate for a hackathon or demo environment.
+Open [http://localhost:5173](http://localhost:5173).
 
 ## How the market works
 
 ### Human trades
 
-- Buys and sells update price via basis-point impact: `min(1000, max(5, shares / 10))` bps
-- Trade size, side, and totals are recorded in your private `my_trades` view
+- Buys and sells move price via basis-point impact
+- Your trades are private (`my_trades` view)
 
-### Institutional behavior
+### AI traders (Nova & Pulse)
 
-Institutions are demo-friendly and biased toward buying:
+- Trade every **30 seconds** via scheduled `ai_trader_llm_tick` procedure
+- With OpenAI configured: LLM reads leaderboard, holdings, cash, and past reasoning
+- Without OpenAI (or on failure): rule-based fallback with distinct personalities
+- Nova: momentum, larger sizes · Pulse: dips, smaller sizes, profit-taking
 
-| Trigger | Behavior |
-|---------|----------|
-| Human buy (large) | ~78% chance institutions accumulate, momentum-buy, or rotate in |
-| Human buy (small) | ~52% chance of bullish follow-through |
-| Human sell | ~68% buy-the-dip; otherwise accumulation or reduced exposure |
-| Scheduled tick (30s) | ~70% bullish (accumulation, momentum, buy-the-dip, sector rotation) |
-| Profit-taking | Only when price is up ≥8% vs previous reference; ~22% chance, less frequent than buying |
+### Institutional auto-trading
 
-Institutional activity moves prices, increases volume, and publishes **AI Market Mover** news. Human activity does not appear in public news.
-
-### Stocks (seed prices)
-
-| Symbol | Company | Seed price |
-|--------|---------|------------|
-| NVDA | NVIDIA Corporation | $205.70 |
-| AAPL | Apple Inc. | $307.88 |
-| GOOGL | Alphabet Inc. | $366.32 |
-| MSFT | Microsoft Corporation | $417.15 |
-| AMZN | Amazon.com Inc. | $246.03 |
+Disabled by default (`AUTOMATIC_MARKET_MOVEMENT = false`). Prices move from **human + bot trades**, not background institutions.
 
 ## Project structure
 
 ```
 market-sim/
-├── spacetimedb/              # SpacetimeDB module (server)
-│   └── src/
-│       ├── index.ts          # Tables, reducers, procedures, market logic
-│       └── llm.ts            # OpenAI / OpenRouter HTTP helpers
+├── spacetimedb/src/
+│   ├── index.ts          # Tables, reducers, procedures, bots, market logic
+│   ├── ai_trader_llm.ts  # LLM prompt + response parsing for bots
+│   └── llm.ts            # OpenAI / OpenRouter HTTP helpers
 ├── src/
-│   ├── App.tsx               # React trading dashboard
-│   ├── main.tsx              # SpacetimeDB connection setup
-│   └── module_bindings/      # Auto-generated — run spacetime:generate after schema changes
-├── spacetime.json            # Database name and server config
-└── package.json
+│   ├── App.tsx           # React dashboard
+│   ├── main.tsx          # SpacetimeDB connection
+│   └── module_bindings/  # Auto-generated — run spacetime:generate after schema changes
+├── .env.example          # Copy to .env.local (not committed)
+└── spacetime.json        # CLI database config
 ```
 
 ## Server API (module)
@@ -126,58 +130,72 @@ market-sim/
 | Reducer | Description |
 |---------|-------------|
 | `buy_stock` / `sell_stock` | Execute trades |
-| `set_name` | Set public leaderboard nickname |
-| `set_global_ai_config` | Configure shared LLM for demo news |
+| `set_name` | Leaderboard nickname |
+| `set_global_ai_config` | Shared LLM key for news + bots |
 | `seed_market` | Idempotent stock seeding |
 
 ### Procedures
 
 | Procedure | Description |
 |-----------|-------------|
-| `generate_demo_news` | Generate market news (LLM or fallback) |
-| `get_global_ai_config_status` | Check whether global AI is configured (no API key returned) |
+| `generate_demo_news` | AI or fallback market news |
+| `get_global_ai_config_status` | Check if AI is configured |
+| `test_global_ai_connection` | Ping OpenAI/OpenRouter |
+| `ai_trader_llm_tick` | Scheduled bot trading (internal) |
 
-### Views (per-identity)
+### Views
 
 | View | Description |
 |------|-------------|
-| `my_account` | Cash balance |
-| `my_holdings` | Stock positions |
-| `my_trades` | Private trade ledger |
+| `my_account` / `my_holdings` / `my_trades` | Your private data |
 | `leaderboard` | Public rankings |
-
-### Public tables
-
-`stock`, `market_news`, `player_directory`, `recent_trade` (institutional activity only in UI)
+| `ai_trader_log` | Bot trade console (public) |
+| `ai_trader_minds` | Bot reasoning + rank (public) |
+| `market_stocks` / `recent_market_news` | Stocks and news feed |
 
 ## npm scripts
 
 | Script | Description |
 |--------|-------------|
-| `npm run dev` | Start Vite dev server |
+| `npm run dev` | Vite dev server |
 | `npm run build` | Production build |
 | `npm run spacetime:generate` | Regenerate TypeScript bindings |
 | `npm run spacetime:publish` | Publish module to maincloud |
-| `npm run spacetime:publish:local` | Publish module to local server |
+
+## Logs & debugging
+
+```bash
+# AI trader decisions
+spacetime logs market-sim-69q12 -f | grep ai_trader_llm
+
+# News generation
+spacetime logs market-sim-69q12 -f | grep generate_demo_news
+
+# OpenAI connection tests
+spacetime logs market-sim-69q12 -f | grep ai_connection
+```
 
 ## Troubleshooting
 
-| Error | Fix |
+| Issue | Fix |
 |-------|-----|
-| `nonexistent procedure "generate_demo_news"` | Publish latest module: `spacetime publish ...` |
-| `invalid arguments` on generate_demo_news | Run `npm run spacetime:generate` and restart dev server |
-| `callChat error: LLM HTTP 429 insufficient_quota` | Add OpenAI billing or switch to OpenRouter in AI Settings |
-| Empty stock dropdown | Call `seed_market` or reconnect after publish |
-| `Insufficient funds` / `Insufficient shares` | Normal validation — check balance and holdings |
+| Bots not trading | Check logs for `ai_trader_llm`; ensure OpenAI connected or fallback runs |
+| `nonexistent procedure` | Publish latest module + `npm run spacetime:generate` |
+| Schema mismatch in browser | `npm run spacetime:generate` and hard-refresh |
+| `insufficient_quota` | OpenAI billing issue — add credits or use OpenRouter |
+| Empty stocks | Reconnect; `seed_market` runs on connect |
+| Lost API key after publish | Key is in DB — publish does not wipe `global_ai_config` |
 
 ## Environment variables
 
-| Variable | Default | Description |
+| Variable | Example | Description |
 |----------|---------|-------------|
-| `VITE_SPACETIMEDB_HOST` | `ws://localhost:3000` | SpacetimeDB WebSocket URI |
-| `VITE_SPACETIMEDB_DB_NAME` | `llm-chat-ts` | Database name (set to `market-sim-69q12` for maincloud) |
+| `VITE_SPACETIMEDB_HOST` | `https://maincloud.spacetimedb.com` | WebSocket host |
+| `VITE_SPACETIMEDB_DB_NAME` | `market-sim-69q12` | Database name |
+
+See `.env.example` for a copy-paste template.
 
 ## Further reading
 
 - [SpacetimeDB TypeScript SDK](https://spacetimedb.com/docs/intro/core-concepts/clients/typescript-reference)
-- [Chat App Tutorial](https://spacetimedb.com/docs/intro/tutorials/chat-app) (original template this project evolved from)
+- [SpacetimeDB CLI install](https://spacetimedb.com/install)

@@ -17,6 +17,61 @@ export const Account = __t.object("Account", {
 });
 export type Account = __Infer<typeof Account>;
 
+export const AiConnectionStatus = __t.object("AiConnectionStatus", {
+  ok: __t.bool(),
+  message: __t.string(),
+  provider: __t.option(__t.string()),
+  model: __t.option(__t.string()),
+});
+export type AiConnectionStatus = __Infer<typeof AiConnectionStatus>;
+
+export const AiTraderLlmTimer = __t.object("AiTraderLlmTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type AiTraderLlmTimer = __Infer<typeof AiTraderLlmTimer>;
+
+export const AiTraderLog = __t.object("AiTraderLog", {});
+export type AiTraderLog = __Infer<typeof AiTraderLog>;
+
+export const AiTraderLogRow = __t.object("AiTraderLogRow", {
+  id: __t.u64(),
+  traderName: __t.string(),
+  traderStyle: __t.string(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  totalCents: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type AiTraderLogRow = __Infer<typeof AiTraderLogRow>;
+
+export const AiTraderMemory = __t.object("AiTraderMemory", {
+  owner: __t.identity(),
+  lastReasoning: __t.string(),
+  lastActionSummary: __t.string(),
+  lastDecisionSource: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type AiTraderMemory = __Infer<typeof AiTraderMemory>;
+
+export const AiTraderMindRow = __t.object("AiTraderMindRow", {
+  traderName: __t.string(),
+  traderStyle: __t.string(),
+  rank: __t.u64(),
+  portfolioValueCents: __t.u64(),
+  cashCents: __t.u64(),
+  lastReasoning: __t.string(),
+  lastActionSummary: __t.string(),
+  lastDecisionSource: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type AiTraderMindRow = __Infer<typeof AiTraderMindRow>;
+
+export const AiTraderMinds = __t.object("AiTraderMinds", {});
+export type AiTraderMinds = __Infer<typeof AiTraderMinds>;
+
 export const GlobalAiConfig = __t.object("GlobalAiConfig", {
   id: __t.string(),
   provider: __t.string(),
@@ -83,11 +138,20 @@ export const MarketNews = __t.object("MarketNews", {
 });
 export type MarketNews = __Infer<typeof MarketNews>;
 
+export const MarketStocks = __t.object("MarketStocks", {});
+export type MarketStocks = __Infer<typeof MarketStocks>;
+
 export const MyAccount = __t.object("MyAccount", {});
 export type MyAccount = __Infer<typeof MyAccount>;
 
 export const MyHoldings = __t.object("MyHoldings", {});
 export type MyHoldings = __Infer<typeof MyHoldings>;
+
+export const MyPlayer = __t.object("MyPlayer", {});
+export type MyPlayer = __Infer<typeof MyPlayer>;
+
+export const MyPortfolioHistory = __t.object("MyPortfolioHistory", {});
+export type MyPortfolioHistory = __Infer<typeof MyPortfolioHistory>;
 
 export const MyTrades = __t.object("MyTrades", {});
 export type MyTrades = __Infer<typeof MyTrades>;
@@ -99,6 +163,24 @@ export const PlayerDirectory = __t.object("PlayerDirectory", {
   updatedAt: __t.timestamp(),
 });
 export type PlayerDirectory = __Infer<typeof PlayerDirectory>;
+
+export const PortfolioHistoryPoint = __t.object("PortfolioHistoryPoint", {
+  hourStartMicros: __t.i64(),
+  portfolioValueCents: __t.u64(),
+});
+export type PortfolioHistoryPoint = __Infer<typeof PortfolioHistoryPoint>;
+
+export const PortfolioSnapshot = __t.object("PortfolioSnapshot", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  hourStartMicros: __t.i64(),
+  portfolioValueCents: __t.u64(),
+  recordedAt: __t.timestamp(),
+});
+export type PortfolioSnapshot = __Infer<typeof PortfolioSnapshot>;
+
+export const RecentMarketNews = __t.object("RecentMarketNews", {});
+export type RecentMarketNews = __Infer<typeof RecentMarketNews>;
 
 export const RecentTrade = __t.object("RecentTrade", {
   id: __t.u64(),
@@ -117,6 +199,8 @@ export const Stock = __t.object("Stock", {
   name: __t.string(),
   priceCents: __t.u64(),
   previousPriceCents: __t.u64(),
+  dayOpenPriceCents: __t.u64(),
+  tradingDayIndex: __t.u64(),
   volume: __t.u64(),
   updatedAt: __t.timestamp(),
 });

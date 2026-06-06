@@ -11,12 +11,13 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  symbol: __t.string().primaryKey(),
-  name: __t.string(),
-  priceCents: __t.u64().name("price_cents"),
-  previousPriceCents: __t.u64().name("previous_price_cents"),
-  dayOpenPriceCents: __t.u64().name("day_open_price_cents"),
-  tradingDayIndex: __t.u64().name("trading_day_index"),
-  volume: __t.u64(),
+  traderName: __t.string().name("trader_name"),
+  traderStyle: __t.string().name("trader_style"),
+  rank: __t.u64(),
+  portfolioValueCents: __t.u64().name("portfolio_value_cents"),
+  cashCents: __t.u64().name("cash_cents"),
+  lastReasoning: __t.string().name("last_reasoning"),
+  lastActionSummary: __t.string().name("last_action_summary"),
+  lastDecisionSource: __t.string().name("last_decision_source"),
   updatedAt: __t.timestamp().name("updated_at"),
 });
