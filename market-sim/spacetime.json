@@ -1,0 +1,8 @@
+{
+  "dev": {
+    "run": "npm run dev"
+  },
+  "database": "market-sim-69q12",
+  "module-path": "./spacetimedb",
+  "server": "maincloud"
+}
