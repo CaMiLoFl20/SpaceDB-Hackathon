@@ -7,16 +7,29 @@ import {
 } from 'spacetimedb/server';
 import { providers } from './llm';
 
-const STARTING_BALANCE_CENTS = 10_000_000n;
+const STARTING_BALANCE_CENTS = 1_000_000n;
 const MAX_NAME_LENGTH = 20;
 const MAX_U64 = (1n << 64n) - 1n;
+const MIN_PRICE_CENTS = 100n;
+const BASIS_POINTS_SCALE = 10_000n;
+const LARGE_HUMAN_BUY_SHARES = 500n;
+const LARGE_PRICE_INCREASE_BPS = 150n;
 
+const AI_INSTITUTIONS = [
+  'Titan Capital',
+  'Northbridge Quant',
+  'Atlas Pension',
+  'Helios Market Making',
+  'Sentinel Asset Management',
+] as const;
+
+// Top 5 US companies by market cap (June 2026). Prices are seed values in cents.
 const SEED_STOCKS = [
-  { symbol: 'ACME', name: 'Acme Corp', priceCents: 12_500n },
-  { symbol: 'NEBX', name: 'Nebula Exchange', priceCents: 34_250n },
-  { symbol: 'ORB', name: 'Orbital Logistics', priceCents: 5_875n },
-  { symbol: 'SAGE', name: 'Sage Analytics', priceCents: 20_100n },
-  { symbol: 'VOLT', name: 'Volt Energy', priceCents: 4_420n },
+  { symbol: 'NVDA', name: 'NVIDIA Corporation', priceCents: 20_570n },
+  { symbol: 'AAPL', name: 'Apple Inc.', priceCents: 30_788n },
+  { symbol: 'GOOGL', name: 'Alphabet Inc.', priceCents: 36_632n },
+  { symbol: 'MSFT', name: 'Microsoft Corporation', priceCents: 41_715n },
+  { symbol: 'AMZN', name: 'Amazon.com Inc.', priceCents: 24_603n },
 ] as const;
 
 const llmConfigRow = {
@@ -226,25 +239,164 @@ type StockRow = {
   updatedAt: ModuleCtx['timestamp'];
 };
 
-function bumpStockVolume(
-  ctx: ModuleCtx,
-  stockRow: StockRow,
+function impactBasisPoints(shares: bigint): bigint {
+  const raw = shares / 10n;
+  if (raw < 5n) return 5n;
+  if (raw > 1000n) return 1000n;
+  return raw;
+}
+
+function applyPriceImpact(
+  priceCents: bigint,
+  direction: 'buy' | 'sell',
   shares: bigint
-): void {
-  if (stockRow.volume > MAX_U64 - shares) {
-    senderError('Stock volume is too large');
+): { previousPriceCents: bigint; priceCents: bigint } {
+  const bps = impactBasisPoints(shares);
+  const previousPriceCents = priceCents;
+  const factor =
+    direction === 'buy'
+      ? BASIS_POINTS_SCALE + bps
+      : BASIS_POINTS_SCALE - bps;
+  let nextPrice = (priceCents * factor) / BASIS_POINTS_SCALE;
+  if (nextPrice < MIN_PRICE_CENTS) nextPrice = MIN_PRICE_CENTS;
+  return { previousPriceCents, priceCents: nextPrice };
+}
+
+function priceIncreaseBps(fromPriceCents: bigint, toPriceCents: bigint): bigint {
+  if (fromPriceCents === 0n) return 0n;
+  return ((toPriceCents - fromPriceCents) * BASIS_POINTS_SCALE) / fromPriceCents;
+}
+
+function actionSeed(
+  ctx: ModuleCtx,
+  symbol: string,
+  value: bigint,
+  salt: bigint
+): bigint {
+  let symHash = 0n;
+  for (let i = 0; i < symbol.length; i++) {
+    symHash = symHash * 31n + BigInt(symbol.charCodeAt(i));
   }
-  ctx.db.stock.symbol.update({
-    ...stockRow,
-    volume: stockRow.volume + shares,
-    updatedAt: ctx.timestamp,
+  const micros = ctx.timestamp.microsSinceUnixEpoch;
+  return (
+    (micros ^ (value * 17n) ^ symHash ^ (salt * 1_000_003n)) &
+    ((1n << 63n) - 1n)
+  );
+}
+
+function shouldAct(seed: bigint, chanceOutOf100: bigint): boolean {
+  return seed % 100n < chanceOutOf100;
+}
+
+function pickInstitution(seed: bigint): string {
+  const index = Number(seed % BigInt(AI_INSTITUTIONS.length));
+  return AI_INSTITUTIONS[index]!;
+}
+
+function deterministicRange(seed: bigint, min: bigint, max: bigint): bigint {
+  const span = max - min + 1n;
+  const offset = ((seed % span) + span) % span;
+  return min + offset;
+}
+
+function insertAiNews(
+  ctx: ModuleCtx,
+  headline: string,
+  body: string,
+  symbol: string
+): void {
+  ctx.db.marketNews.insert({
+    id: 0n,
+    headline: `AI Market Mover: ${headline}`,
+    body,
+    symbol,
+    createdAt: ctx.timestamp,
+    isAiGenerated: true,
   });
 }
 
-export const init = spacetimedb.init(ctx => {
+function applyMarketActivity(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  direction: 'buy' | 'sell',
+  impactShares: bigint,
+  volumeShares: bigint
+): StockRow {
+  if (stockRow.volume > MAX_U64 - volumeShares) {
+    senderError('Stock volume is too large');
+  }
+  const { previousPriceCents, priceCents } = applyPriceImpact(
+    stockRow.priceCents,
+    direction,
+    impactShares
+  );
+  const updated: StockRow = {
+    ...stockRow,
+    previousPriceCents,
+    priceCents,
+    volume: stockRow.volume + volumeShares,
+    updatedAt: ctx.timestamp,
+  };
+  ctx.db.stock.symbol.update(updated);
+  return updated;
+}
+
+function maybeAiMomentumFollow(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  humanShares: bigint
+): StockRow {
+  if (humanShares < LARGE_HUMAN_BUY_SHARES) return stockRow;
+
+  const seed = actionSeed(ctx, stockRow.symbol, humanShares, 1n);
+  if (!shouldAct(seed, 45n)) return stockRow;
+
+  const institution = pickInstitution(seed);
+  const aiShares = deterministicRange(seed / 256n, 5_000n, 15_000n);
+  const updated = applyMarketActivity(ctx, stockRow, 'buy', aiShares, aiShares);
+
+  insertAiNews(
+    ctx,
+    `${updated.symbol} Institutional Follow-Through`,
+    `Unusual volume in ${updated.symbol} after retail buying pressure prompted ${institution} to join institutional accumulation with ${aiShares.toString()} shares.`,
+    updated.symbol
+  );
+
+  return updated;
+}
+
+function maybeAiProfitTaking(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  priceAtStart: bigint
+): StockRow {
+  const increaseBps = priceIncreaseBps(priceAtStart, stockRow.priceCents);
+  if (increaseBps < LARGE_PRICE_INCREASE_BPS) return stockRow;
+
+  const seed = actionSeed(ctx, stockRow.symbol, stockRow.priceCents, 2n);
+  if (!shouldAct(seed, 40n)) return stockRow;
+
+  const institution = pickInstitution(seed + 3n);
+  const aiShares = deterministicRange(seed / 16n, 3_000n, 12_000n);
+  const updated = applyMarketActivity(ctx, stockRow, 'sell', aiShares, aiShares);
+
+  insertAiNews(
+    ctx,
+    `${updated.symbol} Profit-Taking Wave`,
+    `${institution} executed AI-driven profit-taking, selling ${aiShares.toString()} shares of ${updated.symbol} after a sharp rally and unusual volume.`,
+    updated.symbol
+  );
+
+  return updated;
+}
+
+type SeedCtx = Pick<ModuleCtx, 'db' | 'timestamp'>;
+
+function ensureMarketSeeded(ctx: SeedCtx): void {
   const now = ctx.timestamp;
 
   for (const seed of SEED_STOCKS) {
+    if (ctx.db.stock.symbol.find(seed.symbol) != null) continue;
     ctx.db.stock.insert({
       symbol: seed.symbol,
       name: seed.name,
@@ -255,17 +407,26 @@ export const init = spacetimedb.init(ctx => {
     });
   }
 
-  ctx.db.marketNews.insert({
-    id: 0n,
-    headline: 'Welcome to Market Sim',
-    body: 'Trade fictional stocks in real time with other players. Prices update as the market moves — good luck!',
-    symbol: undefined,
-    createdAt: now,
-    isAiGenerated: false,
-  });
+  const hasNews = [...ctx.db.marketNews.iter()].length > 0;
+  if (!hasNews) {
+    ctx.db.marketNews.insert({
+      id: 0n,
+      headline: 'Welcome to Market Sim',
+      body: 'Trade NVDA, AAPL, GOOGL, MSFT, and AMZN in real time with other players. Prices update as the market moves — good luck!',
+      symbol: undefined,
+      createdAt: now,
+      isAiGenerated: false,
+    });
+  }
+}
+
+export const init = spacetimedb.init(ctx => {
+  ensureMarketSeeded(ctx);
 });
 
 export const onConnect = spacetimedb.clientConnected(ctx => {
+  ensureMarketSeeded(ctx);
+
   if (!ctx.db.account.owner.find(ctx.sender)) {
     ctx.db.account.insert({
       owner: ctx.sender,
@@ -386,6 +547,10 @@ export const get_llm_config_status = spacetimedb.procedure(
     })
 );
 
+export const seed_market = spacetimedb.reducer({}, ctx => {
+  ensureMarketSeeded(ctx);
+});
+
 export const set_name = spacetimedb.reducer(
   { name: t.string() },
   (ctx, { name }) => {
@@ -457,15 +622,20 @@ export const buy_stock = spacetimedb.reducer(
       });
     }
 
+    const priceAtStart = stockRow.priceCents;
+
     recordTrade(
       ctx,
       stockRow.symbol,
       'buy',
       shares,
-      stockRow.priceCents,
+      priceAtStart,
       totalCents
     );
-    bumpStockVolume(ctx, stockRow, shares);
+
+    let currentStock = applyMarketActivity(ctx, stockRow, 'buy', shares, shares);
+    currentStock = maybeAiMomentumFollow(ctx, currentStock, shares);
+    maybeAiProfitTaking(ctx, currentStock, priceAtStart);
   }
 );
 
@@ -502,15 +672,18 @@ export const sell_stock = spacetimedb.reducer(
       });
     }
 
+    const executionPrice = stockRow.priceCents;
+
     recordTrade(
       ctx,
       stockRow.symbol,
       'sell',
       shares,
-      stockRow.priceCents,
+      executionPrice,
       totalCents
     );
-    bumpStockVolume(ctx, stockRow, shares);
+
+    applyMarketActivity(ctx, stockRow, 'sell', shares, shares);
   }
 );
 
