@@ -59,6 +59,49 @@ label {
   color: #374151;
 }
 
+.portfolio-chart {
+  padding-top: 0.75rem;
+  border-top: 1px solid rgb(255 255 255 / 15%);
+}
+
+.portfolio-chart__header {
+  margin-bottom: 0.75rem;
+}
+
+.portfolio-chart__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #f9fafb;
+}
+
+.portfolio-chart__subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: #9ca3af;
+}
+
+.portfolio-chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.portfolio-chart__grid {
+  stroke: rgb(255 255 255 / 12%);
+  stroke-width: 1;
+}
+
+.portfolio-chart__ylabel,
+.portfolio-chart__xlabel {
+  fill: #9ca3af;
+  font-size: 10px;
+}
+
+.portfolio-chart__area {
+  fill: rgb(134 239 172 / 18%);
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -380,6 +423,129 @@ label {
 .config-modal header button {
   color: #374151;
   background: #e5e7eb;
+}
+
+.bot-console {
+  padding: 1.25rem;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+.bot-console__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.bot-console__title {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #f8fafc;
+}
+
+.bot-console__subtitle {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+
+.bot-console__standings {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.bot-console__badge {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  border: 1px solid rgb(148 163 184 / 35%);
+  background: rgb(15 23 42 / 80%);
+}
+
+.bot-console__badge--nova {
+  color: #67e8f9;
+  border-color: rgb(103 232 249 / 35%);
+}
+
+.bot-console__badge--pulse {
+  color: #fcd34d;
+  border-color: rgb(252 211 77 / 35%);
+}
+
+.bot-console__minds {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.bot-console__mind {
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.55rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  border: 1px solid rgb(148 163 184 / 25%);
+  background: rgb(15 23 42 / 70%);
+}
+
+.bot-console__mind--nova {
+  border-color: rgb(103 232 249 / 30%);
+}
+
+.bot-console__mind--pulse {
+  border-color: rgb(252 211 77 / 30%);
+}
+
+.bot-console__mind-style {
+  margin-top: 0.2rem;
+  color: #94a3b8;
+  font-size: 0.74rem;
+}
+
+.bot-console__mind-thought {
+  margin-top: 0.35rem;
+  color: #cbd5e1;
+}
+
+.bot-console__log {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  min-height: 12rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  border-radius: 0.55rem;
+  background: #020617;
+  border: 1px solid #1e293b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bot-console__line {
+  display: block;
+}
+
+.bot-console__line--buy {
+  color: #86efac;
+}
+
+.bot-console__line--sell {
+  color: #fca5a5;
+}
+
+.bot-console__empty {
+  margin: 0;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
 }
 
 @media (max-width: 760px) {

@@ -11,12 +11,8 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  symbol: __t.string().primaryKey(),
+  owner: __t.identity().primaryKey(),
   name: __t.string(),
-  priceCents: __t.u64().name("price_cents"),
-  previousPriceCents: __t.u64().name("previous_price_cents"),
-  dayOpenPriceCents: __t.u64().name("day_open_price_cents"),
-  tradingDayIndex: __t.u64().name("trading_day_index"),
-  volume: __t.u64(),
+  nameKey: __t.string().name("name_key"),
   updatedAt: __t.timestamp().name("updated_at"),
 });
