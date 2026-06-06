@@ -10,6 +10,7 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export const params = {
+export default {
+  symbol: __t.string(),
+  shares: __t.u64(),
 };
-export const returnType = __t.u64()

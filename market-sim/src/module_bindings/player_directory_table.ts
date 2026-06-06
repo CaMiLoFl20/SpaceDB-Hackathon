@@ -10,8 +10,9 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export const params = {
-  chatId: __t.u64(),
-  content: __t.string(),
-};
-export const returnType = __t.unit()
+export default __t.row({
+  owner: __t.identity().primaryKey(),
+  name: __t.string(),
+  nameKey: __t.string().name("name_key"),
+  updatedAt: __t.timestamp().name("updated_at"),
+});

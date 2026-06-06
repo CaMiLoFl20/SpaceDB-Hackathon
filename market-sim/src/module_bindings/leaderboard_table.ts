@@ -11,9 +11,8 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.u64(),
   owner: __t.identity(),
-  title: __t.string(),
-  createdAt: __t.timestamp().name("created_at"),
-  updatedAt: __t.timestamp().name("updated_at"),
+  name: __t.string(),
+  balanceCents: __t.u64().name("balance_cents"),
+  estimatedPortfolioValueCents: __t.u64().name("estimated_portfolio_value_cents"),
 });

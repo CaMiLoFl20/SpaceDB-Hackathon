@@ -6,9 +6,15 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
-import DeleteChatReducer from "../delete_chat_reducer";
+import BuyStockReducer from "../buy_stock_reducer";
+import GenerateDemoNewsReducer from "../generate_demo_news_reducer";
+import SellStockReducer from "../sell_stock_reducer";
 import SetLlmConfigReducer from "../set_llm_config_reducer";
+import SetNameReducer from "../set_name_reducer";
 
-export type DeleteChatParams = __Infer<typeof DeleteChatReducer>;
+export type BuyStockParams = __Infer<typeof BuyStockReducer>;
+export type GenerateDemoNewsParams = __Infer<typeof GenerateDemoNewsReducer>;
+export type SellStockParams = __Infer<typeof SellStockReducer>;
 export type SetLlmConfigParams = __Infer<typeof SetLlmConfigReducer>;
+export type SetNameParams = __Infer<typeof SetNameReducer>;
 

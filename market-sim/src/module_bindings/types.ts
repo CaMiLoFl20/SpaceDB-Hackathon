@@ -10,37 +10,32 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export const Chat = __t.object("Chat", {});
-export type Chat = __Infer<typeof Chat>;
-
-export const ChatMessage = __t.object("ChatMessage", {
-  id: __t.u64(),
-  chatId: __t.u64(),
+export const Account = __t.object("Account", {
   owner: __t.identity(),
-  role: __t.string(),
-  content: __t.string(),
-  isError: __t.bool(),
-  createdAt: __t.timestamp(),
-});
-export type ChatMessage = __Infer<typeof ChatMessage>;
-
-export const ChatThread = __t.object("ChatThread", {
-  id: __t.u64(),
-  owner: __t.identity(),
-  title: __t.string(),
-  createdAt: __t.timestamp(),
+  balanceCents: __t.u64(),
   updatedAt: __t.timestamp(),
 });
-export type ChatThread = __Infer<typeof ChatThread>;
+export type Account = __Infer<typeof Account>;
 
-export const ChatViewRow = __t.object("ChatViewRow", {
+export const Holding = __t.object("Holding", {
   id: __t.u64(),
   owner: __t.identity(),
-  title: __t.string(),
-  createdAt: __t.timestamp(),
+  symbol: __t.string(),
+  shares: __t.u64(),
   updatedAt: __t.timestamp(),
 });
-export type ChatViewRow = __Infer<typeof ChatViewRow>;
+export type Holding = __Infer<typeof Holding>;
+
+export const Leaderboard = __t.object("Leaderboard", {});
+export type Leaderboard = __Infer<typeof Leaderboard>;
+
+export const LeaderboardRow = __t.object("LeaderboardRow", {
+  owner: __t.identity(),
+  name: __t.string(),
+  balanceCents: __t.u64(),
+  estimatedPortfolioValueCents: __t.u64(),
+});
+export type LeaderboardRow = __Infer<typeof LeaderboardRow>;
 
 export const LlmConfig = __t.object("LlmConfig", {
   owner: __t.identity(),
@@ -60,17 +55,64 @@ export const LlmConfigStatus = __t.object("LlmConfigStatus", {
 });
 export type LlmConfigStatus = __Infer<typeof LlmConfigStatus>;
 
-export const Message = __t.object("Message", {});
-export type Message = __Infer<typeof Message>;
-
-export const MessageViewRow = __t.object("MessageViewRow", {
+export const MarketNews = __t.object("MarketNews", {
   id: __t.u64(),
-  chatId: __t.u64(),
+  headline: __t.string(),
+  body: __t.string(),
+  symbol: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  isAiGenerated: __t.bool(),
+});
+export type MarketNews = __Infer<typeof MarketNews>;
+
+export const MyAccount = __t.object("MyAccount", {});
+export type MyAccount = __Infer<typeof MyAccount>;
+
+export const MyHoldings = __t.object("MyHoldings", {});
+export type MyHoldings = __Infer<typeof MyHoldings>;
+
+export const MyTrades = __t.object("MyTrades", {});
+export type MyTrades = __Infer<typeof MyTrades>;
+
+export const PlayerDirectory = __t.object("PlayerDirectory", {
   owner: __t.identity(),
-  role: __t.string(),
-  content: __t.string(),
-  isError: __t.bool(),
+  name: __t.string(),
+  nameKey: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type PlayerDirectory = __Infer<typeof PlayerDirectory>;
+
+export const RecentTrade = __t.object("RecentTrade", {
+  id: __t.u64(),
+  trader: __t.identity(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  totalCents: __t.u64(),
   createdAt: __t.timestamp(),
 });
-export type MessageViewRow = __Infer<typeof MessageViewRow>;
+export type RecentTrade = __Infer<typeof RecentTrade>;
+
+export const Stock = __t.object("Stock", {
+  symbol: __t.string(),
+  name: __t.string(),
+  priceCents: __t.u64(),
+  previousPriceCents: __t.u64(),
+  volume: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type Stock = __Infer<typeof Stock>;
+
+export const TradeLedger = __t.object("TradeLedger", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  totalCents: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type TradeLedger = __Infer<typeof TradeLedger>;
 
