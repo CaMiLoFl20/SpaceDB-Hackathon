@@ -25,11 +25,29 @@ export const AiConnectionStatus = __t.object("AiConnectionStatus", {
 });
 export type AiConnectionStatus = __Infer<typeof AiConnectionStatus>;
 
-export const AiTraderLlmTimer = __t.object("AiTraderLlmTimer", {
+export const AiMarketNewsTimer = __t.object("AiMarketNewsTimer", {
   scheduledId: __t.u64(),
   scheduledAt: __t.scheduleAt(),
 });
-export type AiTraderLlmTimer = __Infer<typeof AiTraderLlmTimer>;
+export type AiMarketNewsTimer = __Infer<typeof AiMarketNewsTimer>;
+
+export const AiNewsStatus = __t.object("AiNewsStatus", {});
+export type AiNewsStatus = __Infer<typeof AiNewsStatus>;
+
+export const AiNewsStatusRow = __t.object("AiNewsStatusRow", {
+  active: __t.bool(),
+  paused: __t.bool(),
+  lastError: __t.string(),
+});
+export type AiNewsStatusRow = __Infer<typeof AiNewsStatusRow>;
+
+export const AiSchedulerState = __t.object("AiSchedulerState", {
+  key: __t.string(),
+  paused: __t.bool(),
+  lastError: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type AiSchedulerState = __Infer<typeof AiSchedulerState>;
 
 export const AiTraderLog = __t.object("AiTraderLog", {});
 export type AiTraderLog = __Infer<typeof AiTraderLog>;
@@ -71,6 +89,18 @@ export type AiTraderMindRow = __Infer<typeof AiTraderMindRow>;
 
 export const AiTraderMinds = __t.object("AiTraderMinds", {});
 export type AiTraderMinds = __Infer<typeof AiTraderMinds>;
+
+export const AiTraderNovaTimer = __t.object("AiTraderNovaTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type AiTraderNovaTimer = __Infer<typeof AiTraderNovaTimer>;
+
+export const AiTraderPulseTimer = __t.object("AiTraderPulseTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type AiTraderPulseTimer = __Infer<typeof AiTraderPulseTimer>;
 
 export const GlobalAiConfig = __t.object("GlobalAiConfig", {
   id: __t.string(),

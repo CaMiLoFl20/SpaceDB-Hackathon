@@ -48,6 +48,7 @@ import * as GetLlmConfigStatusProcedure from "./get_llm_config_status_procedure"
 import * as TestGlobalAiConnectionProcedure from "./test_global_ai_connection_procedure";
 
 // Import all table schema definitions
+import AiNewsStatusRow from "./ai_news_status_table";
 import AiTraderLogRow from "./ai_trader_log_table";
 import AiTraderMindsRow from "./ai_trader_minds_table";
 import LeaderboardRow from "./leaderboard_table";
@@ -124,6 +125,13 @@ const tablesSchema = __schema({
       { name: 'stock_symbol_key', constraint: 'unique', columns: ['symbol'] },
     ],
   }, StockRow),
+  ai_news_status: __table({
+    name: 'ai_news_status',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, AiNewsStatusRow),
   ai_trader_log: __table({
     name: 'ai_trader_log',
     indexes: [

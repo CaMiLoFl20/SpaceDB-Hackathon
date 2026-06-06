@@ -4,11 +4,16 @@ import {
   table,
   t,
   SenderError,
+  type ProcedureCtx,
   type ReducerCtx,
 } from 'spacetimedb/server';
 import {
-  buildTraderLlmMessages,
-  parseTraderLlmResponse,
+  buildAutoNewsLlmMessages,
+  parseAutoNewsLlmResponse,
+} from './ai_market_news';
+import {
+  buildSingleTraderLlmMessages,
+  parseSingleTraderLlmResponse,
   type LlmTraderDecision,
 } from './ai_trader_llm';
 import {
@@ -33,8 +38,16 @@ const GLOBAL_AI_CONFIG_ID = 'global';
 const AUTOMATIC_MARKET_MOVEMENT = false;
 const AI_TRADER_BOTS_ENABLED = true;
 const AI_TRADER_LLM_ENABLED = true;
+const AI_AUTO_NEWS_ENABLED = true;
 const MARKET_TICK_INTERVAL_MICROS = 30_000_000n;
-const AI_TRADER_LLM_INTERVAL_MICROS = 30_000_000n;
+const AI_NEWS_TRADE_BUMP_MICROS = 12_000_000n;
+const AI_NEWS_MIN_CHECK_MICROS = 25_000_000n;
+const AI_NEWS_MAX_CHECK_MICROS = 180_000_000n;
+const AI_TRADER_MIN_CHECK_MICROS = 20_000_000n;
+const AI_TRADER_MAX_CHECK_MICROS = 120_000_000n;
+const AI_NOVA_INITIAL_DELAY_MICROS = 18_000_000n;
+const AI_PULSE_INITIAL_DELAY_MICROS = 52_000_000n;
+const AI_NEWS_INITIAL_DELAY_MICROS = 35_000_000n;
 const MICROS_PER_DAY = 86_400_000_000n;
 const HOUR_MICROS = 3_600_000_000n;
 const PORTFOLIO_HISTORY_HOURS = 24n;
@@ -229,10 +242,23 @@ const aiTraderMindRow = t.object('AiTraderMindRow', {
   updatedAt: t.timestamp(),
 });
 
-const aiTraderLlmTimerRow = {
+const scheduledTimerRow = {
   scheduledId: t.u64().primaryKey().autoInc(),
   scheduledAt: t.scheduleAt(),
 };
+
+const aiSchedulerStateRow = {
+  key: t.string().primaryKey(),
+  paused: t.bool(),
+  lastError: t.string(),
+  updatedAt: t.timestamp(),
+};
+
+const aiNewsStatusRow = t.object('AiNewsStatusRow', {
+  active: t.bool(),
+  paused: t.bool(),
+  lastError: t.string(),
+});
 
 const llmConfig = table({ name: 'llm_config', public: false }, llmConfigRow);
 const globalAiConfig = table(
@@ -246,13 +272,28 @@ const tickTimer = table(
   },
   tickTimerRow
 );
-const aiTraderLlmTimer = table(
+const aiTraderNovaTimer = table(
   {
-    name: 'ai_trader_llm_timer',
-    scheduled: (): any => ai_trader_llm_tick,
+    name: 'ai_trader_nova_timer',
+    scheduled: (): any => ai_trader_nova_tick,
   },
-  aiTraderLlmTimerRow
+  scheduledTimerRow
 );
+const aiTraderPulseTimer = table(
+  {
+    name: 'ai_trader_pulse_timer',
+    scheduled: (): any => ai_trader_pulse_tick,
+  },
+  scheduledTimerRow
+);
+const aiMarketNewsTimer = table(
+  {
+    name: 'ai_market_news_timer',
+    scheduled: (): any => ai_market_news_tick,
+  },
+  scheduledTimerRow
+);
+const aiSchedulerState = table({ name: 'ai_scheduler_state' }, aiSchedulerStateRow);
 const aiTraderMemory = table({ name: 'ai_trader_memory' }, aiTraderMemoryRow);
 const stock = table({ name: 'stock', public: true }, stockRow);
 const account = table({ name: 'account' }, accountRow);
@@ -282,7 +323,10 @@ const spacetimedb = schema({
   llmConfig,
   globalAiConfig,
   tickTimer,
-  aiTraderLlmTimer,
+  aiTraderNovaTimer,
+  aiTraderPulseTimer,
+  aiMarketNewsTimer,
+  aiSchedulerState,
   aiTraderMemory,
   stock,
   account,
@@ -556,6 +600,7 @@ function executeBuyForOwner(
     maybeInstitutionalProfitTaking(ctx, currentStock);
   }
   recordPortfolioSnapshot(ctx, owner);
+  requestPromptNewsCheck(ctx);
   return true;
 }
 
@@ -611,6 +656,7 @@ function executeSellForOwner(
     reactInstitutionalToHumanSell(ctx, currentStock, shares);
   }
   recordPortfolioSnapshot(ctx, owner);
+  requestPromptNewsCheck(ctx);
   return true;
 }
 
@@ -1266,7 +1312,7 @@ function reactInstitutionalToHumanSell(
 
 type SeedCtx = Pick<ModuleCtx, 'db' | 'timestamp'>;
 
-function getGlobalAiConfig(ctx: ModuleCtx) {
+function getGlobalAiConfig(ctx: SeedCtx) {
   return ctx.db.globalAiConfig.id.find(GLOBAL_AI_CONFIG_ID);
 }
 
@@ -1279,14 +1325,149 @@ function ensureMarketTickScheduled(ctx: SeedCtx): void {
   });
 }
 
-function ensureAiTraderLlmTickScheduled(ctx: SeedCtx): void {
-  if (!AI_TRADER_LLM_ENABLED) return;
-  const hasTimer = [...ctx.db.aiTraderLlmTimer.iter()].length > 0;
-  if (hasTimer) return;
-  ctx.db.aiTraderLlmTimer.insert({
+function clampDelayMicros(
+  seconds: bigint,
+  minMicros: bigint,
+  maxMicros: bigint
+): bigint {
+  const micros = seconds * 1_000_000n;
+  if (micros < minMicros) return minMicros;
+  if (micros > maxMicros) return maxMicros;
+  return micros;
+}
+
+function scheduleTimerAt(ctx: SeedCtx, dueMicros: bigint, target: 'nova' | 'pulse' | 'news'): void {
+  const row = {
     scheduledId: 0n,
-    scheduledAt: ScheduleAt.interval(AI_TRADER_LLM_INTERVAL_MICROS),
-  });
+    scheduledAt: ScheduleAt.time(dueMicros),
+  };
+  if (target === 'nova') ctx.db.aiTraderNovaTimer.insert(row);
+  else if (target === 'pulse') ctx.db.aiTraderPulseTimer.insert(row);
+  else ctx.db.aiMarketNewsTimer.insert(row);
+}
+
+function scheduleTimerAfter(
+  ctx: SeedCtx,
+  delayMicros: bigint,
+  target: 'nova' | 'pulse' | 'news'
+): void {
+  scheduleTimerAt(ctx, ctx.timestamp.microsSinceUnixEpoch + delayMicros, target);
+}
+
+function hasPendingTimer(ctx: SeedCtx, target: 'nova' | 'pulse' | 'news'): boolean {
+  if (target === 'nova') return [...ctx.db.aiTraderNovaTimer.iter()].length > 0;
+  if (target === 'pulse') return [...ctx.db.aiTraderPulseTimer.iter()].length > 0;
+  return [...ctx.db.aiMarketNewsTimer.iter()].length > 0;
+}
+
+function getSchedulerState(ctx: SeedCtx, key: string) {
+  return ctx.db.aiSchedulerState.key.find(key);
+}
+
+function setSchedulerState(
+  ctx: SeedCtx,
+  key: string,
+  paused: boolean,
+  lastError: string
+): void {
+  const row = {
+    key,
+    paused,
+    lastError,
+    updatedAt: ctx.timestamp,
+  };
+  const existing = ctx.db.aiSchedulerState.key.find(key);
+  if (existing) ctx.db.aiSchedulerState.key.update(row);
+  else ctx.db.aiSchedulerState.insert(row);
+}
+
+function ensureAiTraderTimersSeeded(ctx: SeedCtx): void {
+  if (!AI_TRADER_BOTS_ENABLED || !AI_TRADER_LLM_ENABLED) return;
+  if (!getGlobalAiConfig(ctx)) return;
+  if (!hasPendingTimer(ctx, 'nova') && !getSchedulerState(ctx, 'nova_trader')?.paused) {
+    scheduleTimerAfter(ctx, AI_NOVA_INITIAL_DELAY_MICROS, 'nova');
+  }
+  if (!hasPendingTimer(ctx, 'pulse') && !getSchedulerState(ctx, 'pulse_trader')?.paused) {
+    scheduleTimerAfter(ctx, AI_PULSE_INITIAL_DELAY_MICROS, 'pulse');
+  }
+}
+
+function ensureAutoNewsTimerSeeded(ctx: SeedCtx): void {
+  if (!AI_AUTO_NEWS_ENABLED) return;
+  if (getSchedulerState(ctx, 'auto_news')?.paused) return;
+  if (!getGlobalAiConfig(ctx)) return;
+  if (hasPendingTimer(ctx, 'news')) return;
+  scheduleTimerAfter(ctx, AI_NEWS_INITIAL_DELAY_MICROS, 'news');
+}
+
+function resumeAutoNewsScheduler(ctx: ModuleCtx): void {
+  setSchedulerState(ctx, 'auto_news', false, '');
+  if (!hasPendingTimer(ctx, 'news')) {
+    scheduleTimerAfter(ctx, AI_NEWS_INITIAL_DELAY_MICROS, 'news');
+  }
+}
+
+function requestPromptNewsCheck(ctx: SeedCtx): void {
+  if (!AI_AUTO_NEWS_ENABLED) return;
+  if (getSchedulerState(ctx, 'auto_news')?.paused) return;
+  if (!getGlobalAiConfig(ctx)) return;
+  if (hasPendingTimer(ctx, 'news')) return;
+  scheduleTimerAfter(ctx, AI_NEWS_TRADE_BUMP_MICROS, 'news');
+}
+
+function tradeActorLabel(ctx: ModuleCtx, trader: PlayerIdentity): string {
+  for (const bot of AI_TRADER_BOTS) {
+    if (botIdentity(bot.identityHex).isEqual(trader)) return bot.name;
+  }
+  return 'Retail trader';
+}
+
+function collectRecentTapeActivity(ctx: ModuleCtx, limit: number): string[] {
+  return [...ctx.db.recentTrade.iter()]
+    .sort((left, right) => {
+      const diff =
+        right.createdAt.microsSinceUnixEpoch - left.createdAt.microsSinceUnixEpoch;
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    })
+    .slice(0, limit)
+    .map(trade => {
+      const actor = tradeActorLabel(ctx, trade.trader);
+      return `${actor} ${trade.side} ${trade.shares.toString()} ${trade.symbol} @ $${centsToDollarString(trade.priceCents)}`;
+    });
+}
+
+function buildAutoNewsContext(ctx: ModuleCtx): string {
+  const stockLines = [...ctx.db.stock.iter()]
+    .sort((left, right) => left.symbol.localeCompare(right.symbol))
+    .map(row => {
+      const dayDelta = row.priceCents - row.dayOpenPriceCents;
+      const sign = dayDelta >= 0n ? '+' : '';
+      return `${row.symbol}: $${centsToDollarString(row.priceCents)} (${sign}$${centsToDollarString(dayDelta < 0n ? -dayDelta : dayDelta)} vs open, vol ${row.volume})`;
+    });
+
+  const tape = collectRecentTapeActivity(ctx, 12);
+  const lastNews = [...ctx.db.marketNews.iter()]
+    .sort((left, right) => {
+      const diff =
+        right.createdAt.microsSinceUnixEpoch - left.createdAt.microsSinceUnixEpoch;
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    })
+    .slice(0, 3)
+    .map(row => `${row.isAiGenerated ? 'AI' : 'Desk'}: ${row.headline}`);
+
+  const lines = [
+    'Live market tape — decide if a news headline is warranted right now.',
+    '',
+    'Stocks:',
+    ...stockLines,
+    '',
+    'Recent trades (retail + Nova AI + Pulse AI):',
+    ...(tape.length > 0 ? tape : ['(no recent trades)']),
+    '',
+    'Recent headlines already published:',
+    ...(lastNews.length > 0 ? lastNews : ['(none yet)']),
+  ];
+  return lines.join('\n');
 }
 
 function centsToDollarString(cents: bigint): string {
@@ -1337,7 +1518,7 @@ function recordAiTraderMemory(
   }
 }
 
-function buildAiTraderLlmContext(ctx: ModuleCtx): string {
+function buildSingleBotLlmContext(ctx: ModuleCtx, focusBot: AiTraderBot): string {
   const leaderboard = [...ctx.db.playerDirectory.iter()]
     .map(player => ({
       name: player.name,
@@ -1376,6 +1557,9 @@ function buildAiTraderLlmContext(ctx: ModuleCtx): string {
   const cheapestStockCents =
     stockPrices.length > 0 ? stockPrices.reduce((min, price) => (price < min ? price : min)) : 0n;
 
+  const tape = collectRecentTapeActivity(ctx, 8);
+  lines.push('', 'Recent market tape:', ...(tape.length > 0 ? tape : ['(quiet)']));
+
   for (const bot of AI_TRADER_BOTS) {
     const owner = botIdentity(bot.identityHex);
     const memory = ctx.db.aiTraderMemory.owner.find(owner);
@@ -1412,10 +1596,69 @@ function buildAiTraderLlmContext(ctx: ModuleCtx): string {
 
   lines.push(
     '',
-    'Choose the next move for Nova AI and Pulse AI to climb the leaderboard.',
-    'At least one bot MUST buy or sell this tick.'
+    `You are deciding ONLY for ${focusBot.name}. Choose when to trade next independently of the other AI.`
   );
   return lines.join('\n');
+}
+
+function runSingleBotLlmTick(ctx: ProcedureCtx<typeof spacetimedb.schemaType>, bot: AiTraderBot): void {
+  if (!AI_TRADER_BOTS_ENABLED || !AI_TRADER_LLM_ENABLED) return;
+
+  const schedulerKey = bot.name === 'Nova AI' ? 'nova_trader' : 'pulse_trader';
+  const setup = ctx.withTx(tx => {
+    ensureAiTradersSeeded(tx);
+    return {
+      context: buildSingleBotLlmContext(tx, bot),
+      globalConfig: getGlobalAiConfig(tx),
+    };
+  });
+
+  if (!setup.globalConfig) {
+    debugAiTraderLlm(`${bot.name}: no OpenAI config — idle`);
+    return;
+  }
+
+  const config = setup.globalConfig;
+  validateProvider(config.provider);
+  const provider = providers[config.provider];
+  if (!provider) return;
+
+  debugAiTraderLlm(`${bot.name}: llm tick provider=${config.provider}`);
+  const result = callChat(ctx.http, provider, {
+    apiKey: config.apiKey,
+    model: config.model,
+    messages: buildSingleTraderLlmMessages(bot.name, bot.styleLabel, setup.context),
+  });
+
+  if (!result.ok) {
+    const err = formatChatError(result.error);
+    debugAiTraderLlm(`${bot.name}: llm failed — ${err}`);
+    ctx.withTx(tx => setSchedulerState(tx, schedulerKey, true, err));
+    return;
+  }
+
+  const decision = parseSingleTraderLlmResponse(result.response.text, bot.name);
+  if (!decision) {
+    debugAiTraderLlm(`${bot.name}: parse failed — reschedule`);
+    ctx.withTx(tx => {
+      setSchedulerState(tx, schedulerKey, false, '');
+      scheduleTimerAfter(tx, clampDelayMicros(40n, AI_TRADER_MIN_CHECK_MICROS, AI_TRADER_MAX_CHECK_MICROS), bot.name === 'Nova AI' ? 'nova' : 'pulse');
+    });
+    return;
+  }
+
+  ctx.withTx(tx => {
+    setSchedulerState(tx, schedulerKey, false, '');
+    applyLlmTraderDecision(tx, decision);
+    snapshotAllPortfolios(tx);
+    const delay = clampDelayMicros(
+      decision.nextCheckSeconds,
+      AI_TRADER_MIN_CHECK_MICROS,
+      AI_TRADER_MAX_CHECK_MICROS
+    );
+    scheduleTimerAfter(tx, delay, bot.name === 'Nova AI' ? 'nova' : 'pulse');
+  });
+  debugAiTraderLlm(`${bot.name}: next check in ${decision.nextCheckSeconds.toString()}s`);
 }
 
 function executeBotSellForCash(
@@ -1604,13 +1847,15 @@ export const init = spacetimedb.init(ctx => {
   ensureMarketSeeded(ctx);
   ensureAiTradersSeeded(ctx);
   ensureMarketTickScheduled(ctx);
-  ensureAiTraderLlmTickScheduled(ctx);
+  ensureAiTraderTimersSeeded(ctx);
+  ensureAutoNewsTimerSeeded(ctx);
 });
 
 export const market_tick = spacetimedb.reducer(
   { timer: tickTimer.rowType },
   (ctx, _args) => {
-    ensureAiTraderLlmTickScheduled(ctx);
+    ensureAiTraderTimersSeeded(ctx);
+    ensureAutoNewsTimerSeeded(ctx);
     rollAllStockTradingDays(ctx);
     if (AUTOMATIC_MARKET_MOVEMENT) {
       runInstitutionalMarketEvent(ctx);
@@ -1622,95 +1867,90 @@ export const market_tick = spacetimedb.reducer(
   }
 );
 
-export const ai_trader_llm_tick = spacetimedb.procedure(
-  { timer: aiTraderLlmTimer.rowType },
+export const ai_trader_nova_tick = spacetimedb.procedure(
+  { timer: aiTraderNovaTimer.rowType },
   t.unit(),
   (ctx, _args) => {
-    if (!AI_TRADER_BOTS_ENABLED) return {};
+    runSingleBotLlmTick(ctx, AI_TRADER_BOTS[0]!);
+    return {};
+  }
+);
 
-    const setup = ctx.withTx(tx => {
-      ensureAiTradersSeeded(tx);
-      return {
-        context: buildAiTraderLlmContext(tx),
-        globalConfig: getGlobalAiConfig(tx),
-      };
-    });
+export const ai_trader_pulse_tick = spacetimedb.procedure(
+  { timer: aiTraderPulseTimer.rowType },
+  t.unit(),
+  (ctx, _args) => {
+    runSingleBotLlmTick(ctx, AI_TRADER_BOTS[1]!);
+    return {};
+  }
+);
 
-    const runRuleFallback = () => {
-      debugAiTraderLlm('using rule-based fallback');
-      ctx.withTx(tx => {
-        runAiTraderCompetition(tx);
-        for (const bot of AI_TRADER_BOTS) {
-          const owner = botIdentity(bot.identityHex);
-          recordAiTraderMemory(
-            tx,
-            owner,
-            'Rule-based fallback while LLM is unavailable.',
-            'rules engine',
-            'rules'
-          );
-        }
-        snapshotAllPortfolios(tx);
-      });
-    };
+export const ai_market_news_tick = spacetimedb.procedure(
+  { timer: aiMarketNewsTimer.rowType },
+  t.unit(),
+  (ctx, _args) => {
+    if (!AI_AUTO_NEWS_ENABLED) return {};
 
-    if (!AI_TRADER_LLM_ENABLED || !setup.globalConfig) {
-      if (AI_TRADER_BOTS_ENABLED) runRuleFallback();
+    const setup = ctx.withTx(tx => ({
+      context: buildAutoNewsContext(tx),
+      globalConfig: getGlobalAiConfig(tx),
+    }));
+
+    if (!setup.globalConfig) {
+      debugGenerateNews('auto news: no config — stopped');
       return {};
     }
 
     const config = setup.globalConfig;
     validateProvider(config.provider);
     const provider = providers[config.provider];
-    if (!provider) {
-      runRuleFallback();
-      return {};
-    }
+    if (!provider) return {};
 
-    debugAiTraderLlm(`llm tick provider=${config.provider} model=${config.model}`);
+    debugGenerateNews(`auto news tick provider=${config.provider}`);
     const result = callChat(ctx.http, provider, {
       apiKey: config.apiKey,
       model: config.model,
-      messages: buildTraderLlmMessages(setup.context),
+      messages: buildAutoNewsLlmMessages(setup.context),
     });
 
     if (!result.ok) {
-      debugAiTraderLlm(`llm call failed: ${formatChatError(result.error)}`);
-      runRuleFallback();
+      const err = formatChatError(result.error);
+      debugGenerateNews(`auto news failed: ${err}`);
+      debugAiConnection(`auto news stopped: ${err}`);
+      ctx.withTx(tx => setSchedulerState(tx, 'auto_news', true, err));
       return {};
     }
 
-    const decisions = parseTraderLlmResponse(result.response.text);
-    if (!decisions) {
-      debugAiTraderLlm('llm response parse failed');
-      runRuleFallback();
+    const decision = parseAutoNewsLlmResponse(result.response.text);
+    if (!decision) {
+      debugGenerateNews('auto news: parse failed — reschedule');
+      ctx.withTx(tx => {
+        setSchedulerState(tx, 'auto_news', false, '');
+        scheduleTimerAfter(
+          tx,
+          clampDelayMicros(50n, AI_NEWS_MIN_CHECK_MICROS, AI_NEWS_MAX_CHECK_MICROS),
+          'news'
+        );
+      });
       return {};
     }
 
-    debugAiTraderLlm(`llm parsed ${decisions.length.toString()} decisions`);
-    const tradesExecuted = ctx.withTx(tx => {
-      let executed = 0;
-      for (const decision of decisions) {
-        if (applyLlmTraderDecision(tx, decision)) executed += 1;
+    ctx.withTx(tx => {
+      setSchedulerState(tx, 'auto_news', false, '');
+      if (decision.publish) {
+        insertMarketNewsRow(tx, decision.headline, decision.body, decision.symbol, true);
+        debugGenerateNews(`auto news published: ${decision.headline}`);
+        debugAiConnection(`auto news published via ${config.provider}`);
+      } else {
+        debugGenerateNews(`auto news skipped: ${decision.reasoning}`);
       }
-      if (executed === 0) {
-        debugAiTraderLlm('no trades executed from LLM — running rule-based fallback');
-        runAiTraderCompetition(tx);
-        for (const bot of AI_TRADER_BOTS) {
-          const owner = botIdentity(bot.identityHex);
-          recordAiTraderMemory(
-            tx,
-            owner,
-            'Rule-based fallback because LLM chose hold or trades failed.',
-            'rules fallback',
-            'rules'
-          );
-        }
-      }
-      snapshotAllPortfolios(tx);
-      return executed;
+      const delay = clampDelayMicros(
+        decision.nextCheckSeconds,
+        AI_NEWS_MIN_CHECK_MICROS,
+        AI_NEWS_MAX_CHECK_MICROS
+      );
+      scheduleTimerAfter(tx, delay, 'news');
     });
-    debugAiTraderLlm(`tick finished with ${tradesExecuted.toString()} llm trade(s)`);
     return {};
   }
 );
@@ -1719,7 +1959,8 @@ export const onConnect = spacetimedb.clientConnected(ctx => {
   ensureMarketSeeded(ctx);
   ensureAiTradersSeeded(ctx);
   ensureMarketTickScheduled(ctx);
-  ensureAiTraderLlmTickScheduled(ctx);
+  ensureAiTraderTimersSeeded(ctx);
+  ensureAutoNewsTimerSeeded(ctx);
 
   if (!ctx.db.account.owner.find(ctx.sender)) {
     ctx.db.account.insert({
@@ -1757,6 +1998,24 @@ export const recent_market_news = spacetimedb.view(
         return diff > 0n ? 1 : diff < 0n ? -1 : 0;
       })
       .slice(0, RECENT_MARKET_NEWS_LIMIT)
+);
+
+export const ai_news_status = spacetimedb.view(
+  { name: 'ai_news_status', public: true },
+  t.array(aiNewsStatusRow),
+  ctx => {
+    const config = ctx.db.globalAiConfig.id.find(GLOBAL_AI_CONFIG_ID);
+    const state = ctx.db.aiSchedulerState.key.find('auto_news');
+    const paused = state?.paused ?? false;
+    const lastError = state?.lastError ?? '';
+    return [
+      {
+        active: config != null && !paused && AI_AUTO_NEWS_ENABLED,
+        paused,
+        lastError,
+      },
+    ];
+  }
 );
 
 export const market_stocks = spacetimedb.anonymousView(
@@ -2008,6 +2267,11 @@ export const set_global_ai_config = spacetimedb.reducer(
     } else {
       ctx.db.globalAiConfig.insert(row);
     }
+
+    resumeAutoNewsScheduler(ctx);
+    setSchedulerState(ctx, 'nova_trader', false, '');
+    setSchedulerState(ctx, 'pulse_trader', false, '');
+    ensureAiTraderTimersSeeded(ctx);
   }
 );
 
@@ -2400,27 +2664,14 @@ export const generate_demo_news = spacetimedb.procedure(
       };
     });
 
-    const fallback = buildFallbackNews(setup.linkedSymbol, setup.stockRow);
     const config = setup.globalConfig;
 
     debugGenerateNews(`llm_config found: ${setup.legacyUserConfig != null}`);
     debugGenerateNews(`global_ai_config found: ${config != null}`);
 
     if (!config) {
-      debugGenerateNews('provider: (none)');
-      debugGenerateNews('model: (none)');
-      debugGenerateNews('callChat invoked: false');
-      debugGenerateNews('using fallback news: true');
-      ctx.withTx(tx => {
-        insertMarketNewsRow(
-          tx,
-          fallback.headline,
-          fallback.body,
-          setup.linkedSymbol,
-          false
-        );
-      });
-      return {};
+      debugGenerateNews('provider: (none) — manual news skipped');
+      senderError('OpenAI is not configured. Add an API key in AI Settings.');
     }
 
     debugGenerateNews(`provider: ${config.provider}`);
@@ -2430,10 +2681,11 @@ export const generate_demo_news = spacetimedb.procedure(
     const provider = providers[config.provider];
     if (!provider) senderError(`llm.unknown_provider:${config.provider}`);
 
+    const tapeActivity = ctx.withTx(tx => collectRecentTapeActivity(tx, 10));
     const messages = buildNewsPrompt(
       setup.linkedSymbol,
       setup.stockRow,
-      setup.recentActivity,
+      [...tapeActivity, ...setup.recentActivity],
       setup.institutionalContext,
       unwrapOptionalString(config.systemPrompt)
     );
@@ -2450,17 +2702,7 @@ export const generate_demo_news = spacetimedb.procedure(
       debugGenerateNews('callChat succeeded: false');
       debugGenerateNews(`callChat error: ${err}`);
       debugAiConnection(`news generation failed: ${err}`);
-      debugGenerateNews('using fallback news: true');
-      ctx.withTx(tx => {
-        insertMarketNewsRow(
-          tx,
-          fallback.headline,
-          fallback.body,
-          setup.linkedSymbol,
-          false
-        );
-      });
-      return {};
+      senderError(`OpenAI connection failed: ${err}`);
     }
 
     debugGenerateNews('callChat succeeded: true');

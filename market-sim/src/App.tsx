@@ -624,6 +624,7 @@ function App() {
   const [portfolioHistory] = useTable(tables.my_portfolio_history);
   const [aiTraderLog] = useTable(tables.ai_trader_log);
   const [aiTraderMinds] = useTable(tables.ai_trader_minds);
+  const [aiNewsStatusRows] = useTable(tables.ai_news_status);
 
   const setName = useReducer(reducers.setName);
   const setGlobalAiConfig = useReducer(reducers.setGlobalAiConfig);
@@ -1413,27 +1414,46 @@ function App() {
             }}
           >
             <h2 style={{ margin: 0 }}>Market activity</h2>
-            <button disabled={submitting} onClick={postDemoNews} type="button">
-              {globalAiConfigured ? 'Generate news' : 'Demo headline'}
-            </button>
+            {globalAiConfigured && (
+              <button
+                disabled={submitting || aiConnectionState === 'failed'}
+                onClick={postDemoNews}
+                type="button"
+              >
+                Breaking headline
+              </button>
+            )}
           </div>
           <p className="muted" style={{ fontSize: '0.85rem', margin: '0.5rem 0 0' }}>
-            Public feed of news, institutional flow, and anonymized market pressure. Human
-            trades are never shown here.
+            Live AI news reacts to retail trades, Nova AI, Pulse AI, and price moves — published
+            on its own schedule, not a fixed timer. Human trades are never named here.
           </p>
           {newsError && (
             <p style={{ color: LOSS_COLOR, margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
               {newsError}
             </p>
           )}
-          {globalAiConfigured && aiConnectionState === 'failed' && (
+          {!globalAiConfigured && (
             <p style={{ color: LOSS_COLOR, margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
-              AI news unavailable — OpenAI cannot connect. {aiConnectionMessage}
+              Auto news is off — add an OpenAI API key in AI Settings.
             </p>
           )}
-          {globalAiConfigured && aiConnectionState === 'connected' && (
-            <p style={{ color: GAIN_COLOR, margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
-              OpenAI connected — Generate news will use live AI headlines.
+          {globalAiConfigured && aiNewsStatusRows[0]?.paused && (
+            <p style={{ color: LOSS_COLOR, margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
+              Auto news paused — OpenAI connection lost.
+              {aiNewsStatusRows[0].lastError ? ` ${aiNewsStatusRows[0].lastError}` : ''}
+            </p>
+          )}
+          {globalAiConfigured &&
+            aiConnectionState === 'connected' &&
+            aiNewsStatusRows[0]?.active && (
+              <p style={{ color: GAIN_COLOR, margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
+                Auto news active — headlines publish when the AI desk sees meaningful activity.
+              </p>
+            )}
+          {globalAiConfigured && aiConnectionState === 'failed' && (
+            <p style={{ color: LOSS_COLOR, margin: '0.5rem 0 0', fontSize: '0.9rem' }}>
+              OpenAI cannot connect. {aiConnectionMessage}
             </p>
           )}
           {sortedNews.length === 0 ? (
@@ -1541,7 +1561,7 @@ function App() {
               <h2 className="bot-console__title">AI trader log</h2>
               <p className="bot-console__subtitle">
                 {globalAiConfigured && aiConnectionState === 'connected'
-                  ? 'Nova and Pulse use OpenAI every 30s to study the leaderboard, remember past moves, and try to beat humans and each other.'
+                  ? 'Nova and Pulse trade independently via OpenAI — each bot decides when to check the market again and whether to buy, sell, or hold.'
                   : 'Nova AI chases momentum with bigger bets. Pulse AI buys dips and locks in gains conservatively (rule-based until OpenAI connects).'}
               </p>
             </div>
