@@ -2,6 +2,8 @@
 
 A real-time multiplayer fund-trading game on SpacetimeDB. Players buy and sell shares of anonymous public funds while hidden AI and scripted managers trade an underlying stock market. Your goal: read the signals, pick the winners, and grow your portfolio.
 
+**Live demo:** https://market-sim-wine.vercel.app
+
 ## Quick start
 
 ```bash
