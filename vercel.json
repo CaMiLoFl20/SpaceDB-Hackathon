@@ -1,0 +1,7 @@
+{
+  "buildCommand": "cd market-sim && npm run build",
+  "outputDirectory": "market-sim/dist",
+  "installCommand": "cd market-sim && npm install",
+  "framework": "vite",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
