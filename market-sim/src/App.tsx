@@ -16,6 +16,7 @@ import { NewsFeed } from './components/NewsFeed';
 import { PortfolioHistoryChart } from './components/PortfolioHistoryChart';
 import { PortfolioSummary } from './components/PortfolioSummary';
 import { PredictionCard } from './components/PredictionCard';
+import { PredictionResultPopup } from './components/PredictionResultPopup';
 import { TradeTicket } from './components/TradeTicket';
 import { buildPortfolioChartSeries } from './utils/chart';
 import {
@@ -123,6 +124,8 @@ function App() {
   const [githubClientId, setGithubClientId] = useState('');
   const [githubLoggingIn, setGithubLoggingIn] = useState(false);
   const [githubError, setGithubError] = useState('');
+  const [predictionPopupDismissed, setPredictionPopupDismissed] = useState(false);
+  const prevPhaseRef = useRef('');
   const [theme, setTheme] = useState<ThemeMode>(() => readStoredTheme());
 
   useEffect(() => {
@@ -184,6 +187,15 @@ function App() {
     () => [...funds].sort((left, right) => left.name.localeCompare(right.name)) as FundMarketItem[],
     [funds, lastRefreshedAt]
   );
+
+  // Reset prediction popup when entering results phase
+  const currentPhase = marketClockRows[0]?.phase ?? '';
+  useEffect(() => {
+    if (currentPhase === 'results' && prevPhaseRef.current !== 'results') {
+      setPredictionPopupDismissed(false);
+    }
+    prevPhaseRef.current = currentPhase;
+  }, [currentPhase]);
 
   const activeSymbol =
     selectedSymbol || (sortedFunds.length > 0 ? sortedFunds[0].symbol : '');
@@ -399,8 +411,7 @@ function App() {
   if (!me) {
     const startGithubLogin = () => {
       if (!githubClientId) return;
-      const redirectUri = window.location.origin + window.location.pathname;
-      window.location.href = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user`;
+      window.location.href = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}&scope=read:user`;
     };
 
     return (
@@ -468,6 +479,19 @@ function App() {
           <strong>{me.name}</strong>
         </div>
       </header>
+
+      {marketClock?.phase === 'results' &&
+        !predictionPopupDismissed &&
+        dailyPrediction?.settledAt != null && (
+          <PredictionResultPopup
+            bestFundSymbol={dailyPrediction.bestFundSymbol}
+            worstFundSymbol={dailyPrediction.worstFundSymbol}
+            bestCorrect={dailyPrediction.bestCorrect}
+            worstCorrect={dailyPrediction.worstCorrect}
+            bonusCents={dailyPrediction.bonusCents}
+            onClose={() => setPredictionPopupDismissed(true)}
+          />
+        )}
 
       <AiSettingsModal
         apiKey={aiDraft.apiKey}
