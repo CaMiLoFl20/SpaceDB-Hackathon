@@ -16,5 +16,6 @@ import {
 
 export const params = {
   code: __t.string(),
+  redirectUri: __t.string(),
 };
 export const returnType = GitHubLoginResult

@@ -67,6 +67,10 @@ function readStoredSoundEnabled(): boolean {
   return localStorage.getItem(SOUND_STORAGE_KEY) === 'on';
 }
 
+function githubOAuthRedirectUri(): string {
+  return window.location.origin;
+}
+
 function ThemeToggle({
   theme,
   onToggle,
@@ -211,12 +215,16 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     if (!code) return;
+    const handledKey = `github-oauth-code:${code}`;
+    if (sessionStorage.getItem(handledKey)) return;
+    sessionStorage.setItem(handledKey, '1');
     githubCodeHandled.current = true;
+    const redirectUri = githubOAuthRedirectUri();
     // Clean the URL
     window.history.replaceState({}, '', window.location.pathname);
     setGithubLoggingIn(true);
     setGithubError('');
-    githubLogin({ code }).then(result => {
+    githubLogin({ code, redirectUri }).then(result => {
       setGithubLoggingIn(false);
       if (!result.ok) {
         setGithubError(result.message);
@@ -541,7 +549,11 @@ function App() {
   if (!me) {
     const startGithubLogin = () => {
       if (!githubClientId) return;
-      window.location.href = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}&scope=read:user`;
+      const redirectUri = githubOAuthRedirectUri();
+      window.location.href =
+        `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+        '&scope=read:user';
     };
 
     return (

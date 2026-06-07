@@ -3753,20 +3753,28 @@ export const set_github_oauth_config = spacetimedb.reducer(
 );
 
 export const github_login = spacetimedb.procedure(
-  { code: t.string() },
+  {
+    code: t.string(),
+    redirectUri: t.string(),
+  },
   t.object('GitHubLoginResult', {
     ok: t.bool(),
     message: t.string(),
     username: t.string().optional(),
     avatarUrl: t.string().optional(),
   }),
-  (ctx, { code }) => {
+  (ctx, { code, redirectUri }) => {
 
     const config = ctx.withTx(tx =>
       tx.db.githubOAuthConfig.id.find(GITHUB_OAUTH_CONFIG_ID)
     );
     if (!config) {
       return { ok: false, message: 'GitHub OAuth is not configured.', username: undefined, avatarUrl: undefined };
+    }
+
+    const normalizedRedirect = redirectUri.trim();
+    if (normalizedRedirect.length === 0) {
+      return { ok: false, message: 'Missing OAuth redirect URI.', username: undefined, avatarUrl: undefined };
     }
 
     // Exchange the authorization code for an access token
@@ -3782,6 +3790,7 @@ export const github_login = spacetimedb.procedure(
           client_id: config.clientId,
           client_secret: config.clientSecret,
           code: code.trim(),
+          redirect_uri: normalizedRedirect,
         }),
       });
     } catch (err) {
