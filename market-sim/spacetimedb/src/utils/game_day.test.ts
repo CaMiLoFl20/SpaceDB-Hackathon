@@ -7,10 +7,15 @@ import {
   OPEN_SESSION_MICROS,
   deriveGameClockState,
   formatGameMinute,
+  gameTimelineMinute,
   shouldRollToNextDay,
 } from './game_day';
 
 describe('game day clock', () => {
+  it('maps day and minute to a monotonic timeline index', () => {
+    expect(gameTimelineMinute(1n, 570n)).toBe(0n);
+    expect(gameTimelineMinute(2n, 570n)).toBe(390n);
+  });
   it('starts at market open and allows predictions', () => {
     const state = deriveGameClockState(1_000n, 1_000n);
     expect(state.phase).toBe('open');

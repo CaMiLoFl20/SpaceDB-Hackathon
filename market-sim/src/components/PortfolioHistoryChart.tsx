@@ -69,7 +69,7 @@ export function PortfolioHistoryChart({
       </div>
       <div className="portfolio-chart__caption">
         <p className="portfolio-chart__subtitle">{chartSummary(points)}</p>
-        <p className="portfolio-chart__subtitle">Time ranges use compressed game time: 30 real seconds = 1 game hour.</p>
+        <p className="portfolio-chart__subtitle">X-axis uses game clock time (9:30 AM – 4:00 PM trading session).</p>
       </div>
       <svg aria-label="Portfolio value over selected game-time range" className="portfolio-chart__svg" role="img" viewBox={`0 0 ${width} ${height}`}>
         {yLabels.map(label => (

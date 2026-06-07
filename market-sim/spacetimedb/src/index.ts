@@ -58,6 +58,7 @@ import {
   OPEN_SESSION_MICROS,
   deriveGameClockState,
   formatGameMinute,
+  gameTimelineMinute,
   shouldRollToNextDay,
 } from './utils/game_day';
 import {
@@ -94,8 +95,7 @@ const AI_HARBOR_INITIAL_DELAY_MICROS = 38_000_000n;
 const AI_APEX_INITIAL_DELAY_MICROS = 58_000_000n;
 const AI_NEWS_INITIAL_DELAY_MICROS = 35_000_000n;
 const MICROS_PER_DAY = 86_400_000_000n;
-const PORTFOLIO_GAME_HOUR_MICROS = 30_000_000n;
-const PORTFOLIO_HISTORY_GAME_HOURS = 24n * 365n;
+const PORTFOLIO_HISTORY_GAME_MINUTES = 365n * (GAME_DAY_CLOSE_MINUTE - GAME_DAY_OPEN_MINUTE);
 const KEY_ARTICLE_CHANCE_DIVISOR = 7n;
 const KEY_ARTICLE_MIN_SHOCK_BPS = 1_200n;
 const KEY_ARTICLE_MAX_SHOCK_BPS = 3_000n;
@@ -717,8 +717,10 @@ function findFundHolding(ctx: ModuleCtx, owner: ModuleCtx['sender'], symbol: str
   return undefined;
 }
 
-function hourStartMicros(micros: bigint): bigint {
-  return (micros / PORTFOLIO_GAME_HOUR_MICROS) * PORTFOLIO_GAME_HOUR_MICROS;
+function currentGameTimelineMinute(ctx: ModuleCtx): bigint {
+  const day = requireGameDay(ctx);
+  const clock = deriveGameClockState(day.openedAtMicros, ctx.timestamp.microsSinceUnixEpoch);
+  return gameTimelineMinute(day.dayIndex, clock.currentGameMinute);
 }
 
 function computePortfolioValueCents(
@@ -746,9 +748,7 @@ function computePortfolioValueCents(
 }
 
 function pruneOldPortfolioSnapshots(ctx: ModuleCtx, owner: ModuleCtx['sender']): void {
-  const cutoff =
-    ctx.timestamp.microsSinceUnixEpoch -
-    (PORTFOLIO_HISTORY_GAME_HOURS + 1n) * PORTFOLIO_GAME_HOUR_MICROS;
+  const cutoff = currentGameTimelineMinute(ctx) - PORTFOLIO_HISTORY_GAME_MINUTES;
   for (const row of ctx.db.portfolioSnapshot.owner.filter(owner)) {
     if (row.hourStartMicros < cutoff) {
       ctx.db.portfolioSnapshot.id.delete(row.id);
@@ -759,10 +759,10 @@ function pruneOldPortfolioSnapshots(ctx: ModuleCtx, owner: ModuleCtx['sender']):
 function recordPortfolioSnapshot(ctx: ModuleCtx, owner: ModuleCtx['sender']): void {
   if (!ctx.db.account.owner.find(owner)) return;
 
-  const hourStart = hourStartMicros(ctx.timestamp.microsSinceUnixEpoch);
+  const timelineMinute = currentGameTimelineMinute(ctx);
   const portfolioValueCents = computePortfolioValueCents(ctx, owner);
   const existing = [
-    ...ctx.db.portfolioSnapshot.by_owner_hour.filter([owner, hourStart]),
+    ...ctx.db.portfolioSnapshot.by_owner_hour.filter([owner, timelineMinute]),
   ][0];
 
   if (existing) {
@@ -775,7 +775,7 @@ function recordPortfolioSnapshot(ctx: ModuleCtx, owner: ModuleCtx['sender']): vo
     ctx.db.portfolioSnapshot.insert({
       id: 0n,
       owner,
-      hourStartMicros: hourStart,
+      hourStartMicros: timelineMinute,
       portfolioValueCents,
       recordedAt: ctx.timestamp,
     });

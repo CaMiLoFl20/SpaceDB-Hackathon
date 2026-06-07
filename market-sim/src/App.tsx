@@ -28,7 +28,7 @@ import { PredictionCard } from './components/PredictionCard';
 import { PredictionResultPopup } from './components/PredictionResultPopup';
 import { ToastStack, type ToastItem } from './components/ToastStack';
 import { TradeTicket } from './components/TradeTicket';
-import { buildPortfolioChartSeries, type PortfolioChartRange } from './utils/chart';
+import { buildPortfolioChartSeries, gameTimelineMinuteFromClock, type PortfolioChartRange } from './utils/chart';
 import { playGameCue, type GameCue } from './utils/audio';
 import {
   GAIN_COLOR,
@@ -286,16 +286,23 @@ function App() {
       });
     }
   }, [addToast, latestKeyArticle, playCue]);
-  const portfolioChartPoints = useMemo(
-    () =>
-      buildPortfolioChartSeries(
-        portfolioHistory,
-        portfolioValue,
-        lastRefreshedAt,
-        portfolioChartRange
-      ),
-    [portfolioHistory, portfolioValue, lastRefreshedAt, portfolioChartRange]
-  );
+  const portfolioChartPoints = useMemo(() => {
+    const dayIndex = marketClock?.dayIndex ?? 1n;
+    const currentGameMinute = marketClock?.currentGameMinute ?? 570n;
+    const nowTimelineMinute = gameTimelineMinuteFromClock(dayIndex, currentGameMinute);
+    return buildPortfolioChartSeries(
+      portfolioHistory,
+      portfolioValue,
+      nowTimelineMinute,
+      portfolioChartRange
+    );
+  }, [
+    portfolioHistory,
+    portfolioValue,
+    marketClock?.dayIndex,
+    marketClock?.currentGameMinute,
+    portfolioChartRange,
+  ]);
   const recentNews = useMemo(
     () => sortByTimeDesc(newsItems).slice(0, 6),
     [newsItems, lastRefreshedAt]

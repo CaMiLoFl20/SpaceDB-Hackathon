@@ -1,20 +1,22 @@
 import { STARTING_CAPITAL_CENTS, clampNonNegativeCents, formatMoney, formatReturn } from './finance';
 
-const GAME_HOUR_MICROS = 30_000_000n;
+const GAME_DAY_OPEN_MINUTE = 570n;
+const GAME_MINUTES_PER_DAY = 390n;
 const MAX_CHART_POINTS = 180;
 
 export type PortfolioChartRange = 'day' | 'week' | 'month' | 'year';
 
 export const PORTFOLIO_CHART_RANGES: Record<
   PortfolioChartRange,
-  { label: string; gameHours: number }
+  { label: string; gameMinutes: number }
 > = {
-  day: { label: '24h', gameHours: 24 },
-  week: { label: 'Week', gameHours: 24 * 7 },
-  month: { label: 'Month', gameHours: 24 * 30 },
-  year: { label: 'Year', gameHours: 24 * 365 },
+  day: { label: 'Today', gameMinutes: Number(GAME_MINUTES_PER_DAY) },
+  week: { label: 'Week', gameMinutes: Number(GAME_MINUTES_PER_DAY) * 7 },
+  month: { label: 'Month', gameMinutes: Number(GAME_MINUTES_PER_DAY) * 30 },
+  year: { label: 'Year', gameMinutes: Number(GAME_MINUTES_PER_DAY) * 365 },
 };
 
+/** Stored in `hourStartMicros` — monotonic game-session minute index from the server. */
 export type PortfolioSnapshot = {
   hourStartMicros: bigint;
   portfolioValueCents: bigint;
@@ -24,38 +26,84 @@ export type PortfolioChartPoint = PortfolioSnapshot & {
   label: string;
 };
 
-function hourStartMicrosFromMs(ms: number): bigint {
-  const micros = BigInt(ms) * 1000n;
-  return (micros / GAME_HOUR_MICROS) * GAME_HOUR_MICROS;
+export function gameTimelineMinuteFromClock(dayIndex: bigint, currentGameMinute: bigint): bigint {
+  const minuteOffset =
+    currentGameMinute > GAME_DAY_OPEN_MINUTE
+      ? currentGameMinute - GAME_DAY_OPEN_MINUTE
+      : 0n;
+  const cappedOffset =
+    minuteOffset > GAME_MINUTES_PER_DAY ? GAME_MINUTES_PER_DAY : minuteOffset;
+  const dayOffset = dayIndex > 0n ? dayIndex - 1n : 0n;
+  return dayOffset * GAME_MINUTES_PER_DAY + cappedOffset;
 }
 
-function chartStepGameHours(range: PortfolioChartRange): number {
-  const hours = PORTFOLIO_CHART_RANGES[range].gameHours;
-  return Math.max(1, Math.ceil(hours / MAX_CHART_POINTS));
+function formatGameClockLabel(timelineMinute: bigint): string {
+  const minuteInDay = timelineMinute % GAME_MINUTES_PER_DAY;
+  const gameMinute = GAME_DAY_OPEN_MINUTE + minuteInDay;
+  const hour24 = gameMinute / 60n;
+  const mins = gameMinute % 60n;
+  const suffix = hour24 >= 12n ? 'PM' : 'AM';
+  const hour12Raw = hour24 % 12n;
+  const hour12 = hour12Raw === 0n ? 12n : hour12Raw;
+  return `${hour12.toString()}:${mins.toString().padStart(2, '0')} ${suffix}`;
 }
 
-function formatGameRangeLabel(hourOffset: number, stepHours: number): string {
-  if (stepHours < 24) return `-${hourOffset}h`;
-  const days = Math.round(hourOffset / 24);
-  if (days < 31) return `-${days}d`;
-  const months = Math.round(days / 30);
+function chartStepGameMinutes(range: PortfolioChartRange): number {
+  const minutes = PORTFOLIO_CHART_RANGES[range].gameMinutes;
+  return Math.max(1, Math.ceil(minutes / MAX_CHART_POINTS));
+}
+
+function formatGameRangeLabel(
+  offsetMinutes: number,
+  stepMinutes: number,
+  range: PortfolioChartRange
+): string {
+  if (offsetMinutes === 0) return 'Now';
+  if (range === 'day') {
+    return formatGameClockLabel(BigInt(offsetMinutes));
+  }
+  if (stepMinutes < 60) return `-${offsetMinutes}m`;
+  const gameHours = Math.round(offsetMinutes / 60);
+  if (gameHours < 24) return `-${gameHours}h`;
+  const gameDays = Math.round(offsetMinutes / Number(GAME_MINUTES_PER_DAY));
+  if (gameDays < 31) return `-${gameDays}d`;
+  const months = Math.round(gameDays / 30);
   if (months < 12) return `-${months}mo`;
-  return `-${Math.round(days / 365)}y`;
+  return `-${Math.round(gameDays / 365)}y`;
 }
 
 export function buildPortfolioChartSeries(
   snapshots: readonly PortfolioSnapshot[],
   livePortfolioCents: bigint,
-  nowMs: number,
+  nowTimelineMinute: bigint,
   range: PortfolioChartRange = 'day'
 ): PortfolioChartPoint[] {
-  const currentHourStart = hourStartMicrosFromMs(nowMs);
+  const sessionStart =
+    (nowTimelineMinute / GAME_MINUTES_PER_DAY) * GAME_MINUTES_PER_DAY;
+  let rangeMinutes = PORTFOLIO_CHART_RANGES[range].gameMinutes;
+  if (range === 'day') {
+    rangeMinutes = Math.max(
+      1,
+      Math.min(rangeMinutes, Number(nowTimelineMinute - sessionStart) + 1)
+    );
+  }
+  const earliestTimeline =
+    range === 'day'
+      ? sessionStart
+      : (() => {
+          const lookbackStart = nowTimelineMinute - BigInt(rangeMinutes);
+          return lookbackStart < 0n ? 0n : lookbackStart;
+        })();
+
   const sortedSnapshots = [
     ...snapshots.map(row => ({
       hourStartMicros: row.hourStartMicros,
       portfolioValueCents: row.portfolioValueCents,
     })),
-    { hourStartMicros: currentHourStart, portfolioValueCents: livePortfolioCents },
+    {
+      hourStartMicros: nowTimelineMinute,
+      portfolioValueCents: livePortfolioCents,
+    },
   ].sort((left, right) => {
     if (left.hourStartMicros < right.hourStartMicros) return -1;
     if (left.hourStartMicros > right.hourStartMicros) return 1;
@@ -65,24 +113,39 @@ export function buildPortfolioChartSeries(
   let lastValue = STARTING_CAPITAL_CENTS;
   let snapshotIndex = 0;
   const points: PortfolioChartPoint[] = [];
-  const rangeHours = PORTFOLIO_CHART_RANGES[range].gameHours;
-  const stepHours = chartStepGameHours(range);
-  const firstOffset = Math.ceil((rangeHours - 1) / stepHours) * stepHours;
+  const stepMinutes = chartStepGameMinutes(range);
+  const firstOffset = Math.min(
+    Math.ceil((rangeMinutes - 1) / stepMinutes) * stepMinutes,
+    Number(nowTimelineMinute - earliestTimeline)
+  );
 
-  for (let offset = firstOffset; offset >= 0; offset -= stepHours) {
-    const hourStart = currentHourStart - BigInt(offset) * GAME_HOUR_MICROS;
+  for (let offset = firstOffset; offset >= 0; offset -= stepMinutes) {
+    let timelineMinute = nowTimelineMinute - BigInt(offset);
+    if (timelineMinute < earliestTimeline) {
+      timelineMinute = earliestTimeline;
+    }
+    if (points.some(point => point.hourStartMicros === timelineMinute)) {
+      continue;
+    }
     while (
       snapshotIndex < sortedSnapshots.length &&
-      sortedSnapshots[snapshotIndex]!.hourStartMicros <= hourStart
+      sortedSnapshots[snapshotIndex]!.hourStartMicros <= timelineMinute
     ) {
       lastValue = sortedSnapshots[snapshotIndex]!.portfolioValueCents;
       snapshotIndex += 1;
     }
 
+    const label =
+      offset === 0
+        ? 'Now'
+        : range === 'day'
+          ? formatGameClockLabel(timelineMinute)
+          : formatGameRangeLabel(offset, stepMinutes, range);
+
     points.push({
-      hourStartMicros: hourStart,
+      hourStartMicros: timelineMinute,
       portfolioValueCents: lastValue,
-      label: offset === 0 ? 'Now' : formatGameRangeLabel(offset, stepHours),
+      label,
     });
   }
 
@@ -151,7 +214,7 @@ export function formatChartAxisLabel(cents: number, tickSpacingCents: number): s
 export function chartSummary(points: readonly PortfolioChartPoint[]): string {
   const first = points[0]?.portfolioValueCents ?? STARTING_CAPITAL_CENTS;
   const last = points[points.length - 1]?.portfolioValueCents ?? STARTING_CAPITAL_CENTS;
-  return `${formatReturn(last, first)} over selected game-time range (${formatMoney(first)} -> ${formatMoney(last)})`;
+  return `${formatReturn(last, first)} over selected range (${formatMoney(first)} -> ${formatMoney(last)})`;
 }
 
 export function chartValues(points: readonly PortfolioChartPoint[]): number[] {

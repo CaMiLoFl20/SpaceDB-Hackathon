@@ -76,3 +76,15 @@ export function shouldRollToNextDay(openedAtMicros: bigint, nowMicros: bigint): 
   const elapsed = nowMicros > openedAtMicros ? nowMicros - openedAtMicros : 0n;
   return elapsed >= OPEN_SESSION_MICROS + FREEZE_MICROS + RESULTS_MICROS;
 }
+
+/** Monotonic trading-session minute across game days (day 1 open = 0). */
+export function gameTimelineMinute(dayIndex: bigint, currentGameMinute: bigint): bigint {
+  const minuteOffset =
+    currentGameMinute > GAME_DAY_OPEN_MINUTE
+      ? currentGameMinute - GAME_DAY_OPEN_MINUTE
+      : 0n;
+  const cappedOffset =
+    minuteOffset > GAME_MINUTES_PER_DAY ? GAME_MINUTES_PER_DAY : minuteOffset;
+  const dayOffset = dayIndex > 0n ? dayIndex - 1n : 0n;
+  return dayOffset * GAME_MINUTES_PER_DAY + cappedOffset;
+}
