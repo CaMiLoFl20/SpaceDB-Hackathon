@@ -36,6 +36,7 @@ import {
 // Import all reducer arg schemas
 import BuyFundReducer from "./buy_fund_reducer";
 import BuyStockReducer from "./buy_stock_reducer";
+import SeedDemoPlayersReducer from "./seed_demo_players_reducer";
 import SeedMarketReducer from "./seed_market_reducer";
 import SellFundReducer from "./sell_fund_reducer";
 import SellStockReducer from "./sell_stock_reducer";
@@ -351,6 +352,7 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("buy_fund", BuyFundReducer),
   __reducerSchema("buy_stock", BuyStockReducer),
+  __reducerSchema("seed_demo_players", SeedDemoPlayersReducer),
   __reducerSchema("seed_market", SeedMarketReducer),
   __reducerSchema("sell_fund", SellFundReducer),
   __reducerSchema("sell_stock", SellStockReducer),

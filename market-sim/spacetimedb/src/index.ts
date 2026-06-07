@@ -44,6 +44,7 @@ import {
   fundAliasFor,
   type FundDefinition,
 } from './models/funds';
+import { DEMO_PLAYERS } from './demo_players';
 import {
   MAX_U64,
   centsToDollarString,
@@ -818,6 +819,130 @@ function isAiTraderIdentity(owner: PlayerIdentity): boolean {
     if (botIdentity(bot.identityHex).isEqual(owner)) return true;
   }
   return false;
+}
+
+function isHumanPlayerIdentity(owner: PlayerIdentity): boolean {
+  return !isFundManagerIdentity(owner);
+}
+
+function clearHumanPlayerData(ctx: ModuleCtx, owner: PlayerIdentity): void {
+  if (!isHumanPlayerIdentity(owner)) return;
+
+  for (const row of [...ctx.db.fundHolding.owner.filter(owner)]) {
+    const fund = ctx.db.fund.symbol.find(row.symbol);
+    if (fund) {
+      ctx.db.fund.symbol.update({
+        ...fund,
+        availableShares: fund.availableShares + row.shares,
+        updatedAt: ctx.timestamp,
+      });
+    }
+    ctx.db.fundHolding.delete(row);
+  }
+
+  for (const row of [...ctx.db.holding.owner.filter(owner)]) {
+    ctx.db.holding.delete(row);
+  }
+
+  for (const row of [...ctx.db.fundTradeLedger.owner.filter(owner)]) {
+    ctx.db.fundTradeLedger.delete(row);
+  }
+
+  for (const row of [...ctx.db.tradeLedger.owner.filter(owner)]) {
+    ctx.db.tradeLedger.delete(row);
+  }
+
+  for (const row of [...ctx.db.portfolioSnapshot.owner.filter(owner)]) {
+    ctx.db.portfolioSnapshot.id.delete(row.id);
+  }
+
+  for (const row of [...ctx.db.dailyPrediction.owner.filter(owner)]) {
+    ctx.db.dailyPrediction.delete(row);
+  }
+
+  const githubProfile = ctx.db.githubProfile.owner.find(owner);
+  if (githubProfile) {
+    ctx.db.githubProfile.delete(githubProfile);
+  }
+
+  const llmConfig = ctx.db.llmConfig.owner.find(owner);
+  if (llmConfig) {
+    ctx.db.llmConfig.owner.delete(owner);
+  }
+
+  const player = ctx.db.playerDirectory.owner.find(owner);
+  if (player) {
+    ctx.db.playerDirectory.delete(player);
+  }
+
+  const playerAccount = ctx.db.account.owner.find(owner);
+  if (playerAccount) {
+    ctx.db.account.delete(playerAccount);
+  }
+}
+
+function clearAllHumanPlayers(ctx: ModuleCtx): void {
+  const owners = new Set<string>();
+  for (const player of ctx.db.playerDirectory.iter()) {
+    if (isHumanPlayerIdentity(player.owner)) {
+      owners.add(player.owner.toHexString());
+    }
+  }
+  for (const account of ctx.db.account.iter()) {
+    if (isHumanPlayerIdentity(account.owner)) {
+      owners.add(account.owner.toHexString());
+    }
+  }
+  for (const hex of owners) {
+    clearHumanPlayerData(ctx, botIdentity(hex));
+  }
+}
+
+function seedDemoPlayers(ctx: ModuleCtx): void {
+  ensureFundsSeeded(ctx);
+  clearAllHumanPlayers(ctx);
+
+  for (const demo of DEMO_PLAYERS) {
+    const owner = botIdentity(demo.identityHex);
+    const nameKey = demo.name.toLowerCase();
+
+    ctx.db.account.insert({
+      owner,
+      balanceCents: demo.balanceCents,
+      updatedAt: ctx.timestamp,
+    });
+
+    ctx.db.playerDirectory.insert({
+      owner,
+      name: demo.name,
+      nameKey,
+      updatedAt: ctx.timestamp,
+    });
+
+    for (const holding of demo.holdings) {
+      const fund = ctx.db.fund.symbol.find(holding.symbol);
+      if (!fund) continue;
+      const shares =
+        fund.availableShares >= holding.shares ? holding.shares : fund.availableShares;
+      if (shares === 0n) continue;
+
+      ctx.db.fund.symbol.update({
+        ...fund,
+        availableShares: fund.availableShares - shares,
+        updatedAt: ctx.timestamp,
+      });
+
+      ctx.db.fundHolding.insert({
+        id: 0n,
+        owner,
+        symbol: holding.symbol,
+        shares,
+        updatedAt: ctx.timestamp,
+      });
+    }
+
+    recordPortfolioSnapshot(ctx, owner);
+  }
 }
 
 function ensureAiTradersSeeded(ctx: TimeCtx): void {
@@ -3039,6 +3164,7 @@ export const init = spacetimedb.init(ctx => {
   ensureMarketTickScheduled(ctx);
   ensureAiTraderTimersSeeded(ctx);
   ensureAutoNewsTimerSeeded(ctx);
+  seedDemoPlayers(ctx);
 });
 
 export const market_tick = spacetimedb.reducer(
@@ -3996,6 +4122,10 @@ export const seed_market = spacetimedb.reducer({}, ctx => {
   ensureMarketTickScheduled(ctx);
   ensureAiTraderTimersSeeded(ctx);
   ensureAutoNewsTimerSeeded(ctx);
+});
+
+export const seed_demo_players = spacetimedb.reducer({}, ctx => {
+  seedDemoPlayers(ctx);
 });
 
 export const set_name = spacetimedb.reducer(
