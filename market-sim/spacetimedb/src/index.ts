@@ -50,7 +50,6 @@ import {
 } from './utils/money';
 import { applyPriceImpact } from './utils/market_math';
 import {
-  FREEZE_MICROS,
   GAME_DAY_CLOSE_MINUTE,
   GAME_DAY_OPEN_MINUTE,
   OPEN_SESSION_MICROS,
@@ -357,6 +356,14 @@ const dailyPredictionViewRow = t.object('DailyPredictionViewRow', {
   bonusCents: t.u64(),
 });
 
+const predictionLeaderboardRow = t.object('PredictionLeaderboardRow', {
+  name: t.string(),
+  totalPredictions: t.u64(),
+  correctPredictions: t.u64(),
+  accuracyPct: t.u64(),
+  totalBonusCents: t.u64(),
+});
+
 const AI_TRADER_LOG_LIMIT = 50;
 
 const aiTraderLogRow = t.object('AiTraderLogRow', {
@@ -472,6 +479,18 @@ const managerTradingPlanStep = table(
   { name: 'manager_trading_plan_step' },
   managerTradingPlanStepRow
 );
+const daySummaryRow = {
+  id: t.u64().primaryKey().autoInc(),
+  dayIndex: t.u64().index('btree'),
+  bestFundSymbol: t.string(),
+  worstFundSymbol: t.string(),
+  bestFundReturnBps: t.i64(),
+  worstFundReturnBps: t.i64(),
+  topPlayerName: t.string(),
+  topPlayerValueCents: t.u64(),
+  createdAt: t.timestamp(),
+};
+const daySummary = table({ name: 'day_summary', public: true }, daySummaryRow);
 const keyArticle = table({ name: 'key_article', public: true }, keyArticleRow);
 const stock = table({ name: 'stock', public: true }, stockRow);
 const fund = table({ name: 'fund', public: true }, fundRow);
@@ -514,6 +533,7 @@ const spacetimedb = schema({
   aiTraderMemory,
   gameDay,
   dailyPrediction,
+  daySummary,
   managerTradingPlan,
   managerTradingPlanStep,
   keyArticle,
@@ -1195,54 +1215,149 @@ function runAiTraderCompetition(ctx: ModuleCtx): void {
   }
 }
 
+// --- Scripted Fund Strategies ---
+
+const STOCK_SYMBOLS: string[] = ['NVDA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN'];
+
+// MKT1 "Sector Rotation" — concentrates in 2-3 stocks, rotates which ones
+// based on the game day index. Responds to key articles by trading the shocked stock.
+function runMkt1SectorRotation(ctx: ModuleCtx, stocks: StockRow[], seed: bigint): void {
+  const definition = SCRIPTED_FUND_DEFINITIONS[0]!;
+  const owner = botIdentity(definition.managerIdentityHex);
+  const account = ctx.db.account.owner.find(owner);
+  if (!account) return;
+
+  if (!shouldAct(seed, 62n)) return;
+
+  const day = currentGameDay(ctx);
+  const dayIndex = day?.dayIndex ?? 0n;
+
+  // Rotate focus sector: pick 2 stocks based on day modulo
+  const rotationIndex = Number(dayIndex % 5n);
+  const focusSymbols = [
+    STOCK_SYMBOLS[rotationIndex]!,
+    STOCK_SYMBOLS[(rotationIndex + 1) % 5]!,
+  ];
+
+  // Check for key article shock — if there's a fresh one, prioritize that stock
+  const articles = [...ctx.db.keyArticle.dayIndex.filter(dayIndex)];
+  const freshArticle = articles.find(a => a.applied);
+  if (freshArticle) {
+    const shockedStock = stocks.find(s => s.symbol === freshArticle.symbol);
+    if (shockedStock) {
+      if (freshArticle.sentiment === 'bullish') {
+        const shares = deterministicRange(seed / 7n, 3n, 10n);
+        const capped = account.balanceCents >= shockedStock.priceCents * shares
+          ? shares : account.balanceCents / shockedStock.priceCents;
+        if (capped > 0n) {
+          executeBuyForOwner(ctx, owner, shockedStock.symbol, capped, false);
+          return;
+        }
+      } else {
+        const holding = [...ctx.db.holding.owner.filter(owner)]
+          .find(h => h.symbol === freshArticle.symbol);
+        if (holding && holding.shares > 0n) {
+          const shares = deterministicRange(seed / 11n, 1n, holding.shares > 8n ? 8n : holding.shares);
+          executeSellForOwner(ctx, owner, freshArticle.symbol, shares, false);
+          return;
+        }
+      }
+    }
+  }
+
+  // Normal rotation: buy focus stocks, sell non-focus holdings
+  const preferBuy = seed % 4n !== 0n;
+  if (preferBuy) {
+    const focusStocks = stocks.filter(s => focusSymbols.includes(s.symbol));
+    const target = focusStocks[Number(seed / 13n % BigInt(focusStocks.length))]!;
+    const shares = deterministicRange(seed / 7n, 2n, 10n);
+    const capped = account.balanceCents >= target.priceCents * shares
+      ? shares : account.balanceCents / target.priceCents;
+    if (capped > 0n) {
+      executeBuyForOwner(ctx, owner, target.symbol, capped, false);
+      return;
+    }
+  }
+
+  // Sell non-focus holdings to rotate out
+  const nonFocusHoldings = [...ctx.db.holding.owner.filter(owner)]
+    .filter(h => !focusSymbols.includes(h.symbol));
+  if (nonFocusHoldings.length > 0) {
+    const holding = nonFocusHoldings[Number(seed / 23n % BigInt(nonFocusHoldings.length))]!;
+    const shares = deterministicRange(seed / 17n, 1n, holding.shares > 6n ? 6n : holding.shares);
+    if (shares > 0n) {
+      executeSellForOwner(ctx, owner, holding.symbol, shares, false);
+    }
+  }
+}
+
+// MKT2 "Momentum Chaser" — buys stocks that are up on the day,
+// sells stocks that are down. Trades more frequently and in larger sizes.
+function runMkt2MomentumChaser(ctx: ModuleCtx, stocks: StockRow[], seed: bigint): void {
+  const definition = SCRIPTED_FUND_DEFINITIONS[1]!;
+  const owner = botIdentity(definition.managerIdentityHex);
+  const account = ctx.db.account.owner.find(owner);
+  if (!account) return;
+
+  if (!shouldAct(seed, 82n)) return;
+
+  // Find winners (up on the day) and losers (down on the day)
+  const winners = stocks.filter(s => s.priceCents > s.dayOpenPriceCents);
+  const losers = stocks.filter(s => s.priceCents < s.dayOpenPriceCents);
+
+  // Sell losers first — dump any holdings in down-trending stocks
+  if (losers.length > 0 && seed % 3n !== 0n) {
+    for (const loser of losers) {
+      const holding = [...ctx.db.holding.owner.filter(owner)]
+        .find(h => h.symbol === loser.symbol);
+      if (holding && holding.shares > 0n) {
+        const shares = deterministicRange(seed / 11n, 2n, holding.shares > 15n ? 15n : holding.shares);
+        if (shares > 0n) {
+          executeSellForOwner(ctx, owner, loser.symbol, shares, false);
+          return;
+        }
+      }
+    }
+  }
+
+  // Buy winners — chase momentum aggressively
+  if (winners.length > 0) {
+    // Weight toward strongest momentum: sort by % gain
+    const sorted = [...winners].sort((a, b) => {
+      const aGain = a.priceCents - a.dayOpenPriceCents;
+      const bGain = b.priceCents - b.dayOpenPriceCents;
+      return bGain > aGain ? 1 : bGain < aGain ? -1 : 0;
+    });
+    const target = sorted[Number(seed / 13n % BigInt(sorted.length))]!;
+    const shares = deterministicRange(seed / 7n, 4n, 20n);
+    const capped = account.balanceCents >= target.priceCents * shares
+      ? shares : account.balanceCents / target.priceCents;
+    if (capped > 0n) {
+      executeBuyForOwner(ctx, owner, target.symbol, capped, false);
+      return;
+    }
+  }
+
+  // Flat market fallback: random small trade
+  const target = stocks[Number(seed / 29n % BigInt(stocks.length))]!;
+  const shares = deterministicRange(seed / 7n, 1n, 5n);
+  const capped = account.balanceCents >= target.priceCents * shares
+    ? shares : account.balanceCents / target.priceCents;
+  if (capped > 0n) {
+    executeBuyForOwner(ctx, owner, target.symbol, capped, false);
+  }
+}
+
 function runScriptedFundCompetition(ctx: ModuleCtx): void {
   const stocks = [...ctx.db.stock.iter()];
   if (stocks.length === 0) return;
-
   const micros = ctx.timestamp.microsSinceUnixEpoch;
-  SCRIPTED_FUND_DEFINITIONS.forEach((definition, index) => {
-    const owner = botIdentity(definition.managerIdentityHex);
-    const seed = actionSeed(ctx, definition.symbol, micros, BigInt(index + 201));
-    const botLike: AiTraderBot = {
-      name: definition.internalName,
-      nameKey: definition.internalName.toLowerCase(),
-      personality: definition.riskProfile,
-      styleLabel: `${definition.riskProfile} scripted fund`,
-      fundSymbol: definition.symbol,
-      identityHex: definition.managerIdentityHex,
-      actChance: definition.riskProfile === 'aggressive' ? 82n : 62n,
-      minSpendPct: definition.riskProfile === 'aggressive' ? 8n : 4n,
-      maxSpendPct: definition.riskProfile === 'aggressive' ? 24n : 14n,
-      minTradeCap: definition.riskProfile === 'aggressive' ? 4n : 2n,
-      maxTradeCap: definition.riskProfile === 'aggressive' ? 22n : 12n,
-    };
-    if (!shouldAct(seed, botLike.actChance)) return;
 
-    const account = ctx.db.account.owner.find(owner);
-    if (!account) return;
-    const preferBuy = seed % 5n !== 0n;
+  const seed1 = actionSeed(ctx, 'MKT1', micros, 201n);
+  runMkt1SectorRotation(ctx, stocks, seed1);
 
-    if (preferBuy) {
-      const stockRow = pickBotStock(botLike, stocks, seed, index);
-      const shares = pickBotBuyShares(
-        botLike,
-        account.balanceCents,
-        stockRow.priceCents,
-        seed
-      );
-      if (shares > 0n && executeBuyForOwner(ctx, owner, stockRow.symbol, shares, false)) {
-        return;
-      }
-    }
-
-    const holdings = [...ctx.db.holding.owner.filter(owner)];
-    if (holdings.length === 0) return;
-    const holding = holdings[Number((seed / 23n) % BigInt(holdings.length))]!;
-    const sellShares = pickBotSellShares(botLike, holding.shares, seed);
-    if (sellShares > 0n) {
-      executeSellForOwner(ctx, owner, holding.symbol, sellShares, false);
-    }
-  });
+  const seed2 = actionSeed(ctx, 'MKT2', micros, 202n);
+  runMkt2MomentumChaser(ctx, stocks, seed2);
 }
 
 type StockRow = {
@@ -2238,14 +2353,16 @@ function buildSingleBotLlmContext(ctx: ModuleCtx, focusBot: AiTraderBot): string
           `${trade.side} ${trade.shares} ${trade.symbol} @ $${centsToDollarString(trade.priceCents)}`
       );
 
+    const isSelf = bot.identityHex === focusBot.identityHex;
     lines.push(
       '',
-      `${publicName} (${bot.styleLabel}):`,
+      `${publicName}:`,
       `Cash: $${centsToDollarString(cashCents)}${canAffordAnyStock ? '' : ' — CANNOT BUY (sell holdings first)'}`,
       `Holdings: ${holdings.length > 0 ? holdings.join(', ') : 'none'}`,
       `Recent trades: ${recentTrades.length > 0 ? recentTrades.join('; ') : 'none'}`,
-      `Last thought (${memory?.lastDecisionSource ?? 'none'}): ${memory?.lastReasoning ?? 'n/a'}`,
-      `Last action: ${memory?.lastActionSummary ?? 'n/a'}`
+      ...(isSelf
+        ? [`Last action: ${memory?.lastActionSummary ?? 'n/a'}`]
+        : [])
     );
   }
 
@@ -2294,6 +2411,7 @@ function runSingleBotLlmTick(ctx: ProcedureCtx<typeof spacetimedb.schemaType>, b
       globalConfig: getGlobalAiConfig(tx),
       dayIndex: day.dayIndex,
       hasPlan: latestPlanFor(tx, owner, day.dayIndex) != null,
+      publicAlias: publicFundName(bot.fundSymbol, tx),
     };
   });
 
@@ -2319,7 +2437,7 @@ function runSingleBotLlmTick(ctx: ProcedureCtx<typeof spacetimedb.schemaType>, b
   const result = callChat(ctx.http, provider, {
     apiKey: config.apiKey,
     model: config.model,
-    messages: buildTradingPlanLlmMessages(bot.name, bot.styleLabel, setup.context),
+    messages: buildTradingPlanLlmMessages(setup.publicAlias, bot.styleLabel, setup.context),
   });
 
   if (!result.ok) {
@@ -2683,8 +2801,55 @@ function maybeCreateKeyArticleForDay(ctx: ModuleCtx, dayIndex: bigint): void {
   refreshAllFundPrices(ctx);
 }
 
+function computeDaySummary(ctx: ModuleCtx, dayIndex: bigint): void {
+  const funds = [...ctx.db.fund.iter()];
+  if (funds.length === 0) return;
+
+  const fundReturns = funds.map(f => ({
+    symbol: f.symbol,
+    returnBps:
+      f.dayOpenPriceCents === 0n
+        ? 0n
+        : ((f.priceCents - f.dayOpenPriceCents) * 10_000n) / f.dayOpenPriceCents,
+  }));
+  fundReturns.sort((a, b) => {
+    const diff = b.returnBps - a.returnBps;
+    if (diff > 0n) return 1;
+    if (diff < 0n) return -1;
+    return a.symbol.localeCompare(b.symbol);
+  });
+
+  const best = fundReturns[0]!;
+  const worst = fundReturns[fundReturns.length - 1]!;
+
+  const players = [...ctx.db.playerDirectory.iter()]
+    .map(p => ({
+      name: p.name,
+      value: computePortfolioValueCents(ctx, p.owner),
+    }))
+    .sort((a, b) => {
+      if (b.value > a.value) return 1;
+      if (b.value < a.value) return -1;
+      return a.name.localeCompare(b.name);
+    });
+  const topPlayer = players[0];
+
+  ctx.db.daySummary.insert({
+    id: 0n,
+    dayIndex,
+    bestFundSymbol: best.symbol,
+    worstFundSymbol: worst.symbol,
+    bestFundReturnBps: best.returnBps,
+    worstFundReturnBps: worst.returnBps,
+    topPlayerName: topPlayer?.name ?? '',
+    topPlayerValueCents: topPlayer?.value ?? 0n,
+    createdAt: ctx.timestamp,
+  });
+}
+
 function startNextGameDay(ctx: ModuleCtx): void {
   const existing = requireGameDay(ctx);
+  computeDaySummary(ctx, existing.dayIndex);
   settlePredictionsForDay(ctx, existing.dayIndex);
   const nextDayIndex = existing.dayIndex + 1n;
   ctx.db.gameDay.id.update({
@@ -3004,6 +3169,21 @@ export const market_clock = spacetimedb.anonymousView(
   }
 );
 
+export const latest_day_summary = spacetimedb.anonymousView(
+  { name: 'latest_day_summary', public: true },
+  t.array(daySummary.rowType),
+  ctx => {
+    const rows = [...ctx.db.daySummary.iter()];
+    if (rows.length === 0) return [];
+    rows.sort((a, b) => {
+      if (b.dayIndex > a.dayIndex) return 1;
+      if (b.dayIndex < a.dayIndex) return -1;
+      return 0;
+    });
+    return [rows[0]!];
+  }
+);
+
 export const market_stocks = spacetimedb.anonymousView(
   { name: 'market_stocks', public: true },
   t.array(stock.rowType),
@@ -3020,8 +3200,8 @@ export const market_funds = spacetimedb.anonymousView(
       .map(row => ({
         symbol: row.symbol,
         name: row.name,
-        kind: row.kind,
-        riskProfile: row.riskProfile,
+        kind: 'fund' as typeof row.kind,
+        riskProfile: 'managed' as typeof row.riskProfile,
         totalShares: row.totalShares,
         availableShares: row.availableShares,
         navCents: row.navCents,
@@ -3090,7 +3270,7 @@ export const prediction_results = spacetimedb.view(
         if (right.dayIndex < left.dayIndex) return -1;
         return 0;
       })
-      .slice(0, 5)
+      .slice(0, 10)
       .map(row => ({
         dayIndex: row.dayIndex,
         bestFundSymbol: row.bestFundSymbol,
@@ -3103,6 +3283,45 @@ export const prediction_results = spacetimedb.view(
         worstCorrect: row.worstCorrect,
         bonusCents: row.bonusCents,
       }))
+);
+
+export const prediction_leaderboard = spacetimedb.anonymousView(
+  { name: 'prediction_leaderboard', public: true },
+  t.array(predictionLeaderboardRow),
+  ctx => {
+    const settled = [...ctx.db.dailyPrediction.iter()].filter(p => p.settledAt != null);
+    const byOwner = new Map<string, { total: bigint; correct: bigint; bonus: bigint }>();
+    for (const p of settled) {
+      const key = p.owner.toHexString();
+      const entry = byOwner.get(key) ?? { total: 0n, correct: 0n, bonus: 0n };
+      entry.total += 1n;
+      if (p.bestCorrect) entry.correct += 1n;
+      if (p.worstCorrect) entry.correct += 1n;
+      entry.bonus += p.bonusCents;
+      byOwner.set(key, entry);
+    }
+    const rows = [...byOwner.entries()].map(([hex, stats]) => {
+      const player = [...ctx.db.playerDirectory.iter()].find(
+        p => p.owner.toHexString() === hex
+      );
+      const totalChecks = stats.total * 2n;
+      return {
+        name: player?.name ?? 'Unknown',
+        totalPredictions: stats.total,
+        correctPredictions: stats.correct,
+        accuracyPct: totalChecks > 0n ? (stats.correct * 100n) / totalChecks : 0n,
+        totalBonusCents: stats.bonus,
+      };
+    });
+    rows.sort((a, b) => {
+      if (b.accuracyPct > a.accuracyPct) return 1;
+      if (b.accuracyPct < a.accuracyPct) return -1;
+      if (b.totalBonusCents > a.totalBonusCents) return 1;
+      if (b.totalBonusCents < a.totalBonusCents) return -1;
+      return a.name.localeCompare(b.name);
+    });
+    return rows.slice(0, 10);
+  }
 );
 
 export const my_portfolio_history = spacetimedb.view(
@@ -3176,9 +3395,9 @@ export const ai_trader_minds = spacetimedb.view(
         rank: rankIndex >= 0 ? BigInt(rankIndex + 1) : 0n,
         portfolioValueCents: portfolioValue,
         cashCents,
-        lastReasoning: memory?.lastReasoning ?? 'Waiting for first LLM decision...',
+        lastReasoning: 'Analyzing market conditions...',
         lastActionSummary: memory?.lastActionSummary ?? 'none',
-        lastDecisionSource: memory?.lastDecisionSource ?? 'none',
+        lastDecisionSource: 'internal',
         updatedAt: memory?.updatedAt ?? player!.updatedAt,
       };
     });

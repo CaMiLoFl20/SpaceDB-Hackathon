@@ -17,9 +17,10 @@ export function buildAutoNewsLlmMessages(marketContext: string): ChatMessage[] {
       role: 'system',
       content: [
         'You are the live market news desk for a multiplayer stock simulator.',
-        'React to recent retail trades, AI bot trades (Nova AI, Pulse AI), and price/volume moves.',
+        'React to recent retail trades, fund manager trades, and price/volume moves.',
         'Publish news only when something meaningful happened — do not repeat stale stories.',
-        'Never name individual human players; use "retail traders", "AI desks", "unusual volume", etc.',
+        'Never name individual human players; use "retail traders", "institutional desks", "unusual volume", etc.',
+        'Do not reveal fund management styles, strategy types, or distinguish between fund types.',
         'Respond with JSON only:',
         '{"publish":true|false,"headline":"...","body":"...","symbol":"TICKER or empty","next_check_seconds":number,"reasoning":"one sentence"}',
         'If publish is false, leave headline/body empty strings.',

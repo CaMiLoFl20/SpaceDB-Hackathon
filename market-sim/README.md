@@ -1,22 +1,68 @@
 # Market Sim / Fund Floor
 
-A multiplayer fund-trading game built on [SpacetimeDB](https://spacetimedb.com). Players trade shares of public funds while hidden LLM and scripted managers trade an underlying stock market. The player goal is to infer which funds will perform best and grow their own portfolio.
+A multiplayer fund-trading game built on [SpacetimeDB](https://spacetimedb.com). Players trade shares of anonymous public funds while hidden LLM and scripted managers trade an underlying stock market. The player goal is to read the signals, pick the best funds, and grow their portfolio.
+
+## How to Play
+
+### Getting Started
+
+1. Open the app and pick a **nickname** — you start with **$10,000** in cash.
+2. The **fund market** shows five anonymous funds with current prices, daily returns, and available shares.
+3. Fund names rotate each day. Some funds are managed by AI, some by algorithms — figuring out which is which is part of the game.
+
+### Trading
+
+- Select a fund from the market table, enter a share count, and click **Buy** or **Sell**.
+- Fund share prices are backed by each manager's underlying portfolio NAV (net asset value). When a manager trades well, their fund price goes up.
+- Each fund has a limited public float (250,000 shares). Shares you buy come from the float; shares you sell go back into it.
+- Your portfolio value = cash + (fund shares x current fund prices).
+
+### Daily Predictions
+
+- Before **10:30 AM game time** each day, you can predict which fund will be the **best performer** and which will be the **worst**.
+- Correct picks pay cash bonuses at market close:
+  - Best fund correct: **$250**
+  - Worst fund correct: **$250**
+  - Both correct (combo): **$250** bonus
+- Your prediction history and a **prediction leaderboard** track accuracy over time.
+
+### Reading the Signals
+
+- **Manager activity tape** — see real-time trades by fund managers (buy/sell, stock, shares, price).
+- **Market news** — AI-generated headlines react to trading activity and market moves.
+- **Fund price movements** — watch which funds are gaining or losing value throughout the day.
+- **Key articles** — occasional market shock events can move individual stock prices significantly.
+
+### Game Day Cycle
+
+Each trading day runs on compressed time (~3.25 real-time minutes per game day):
+
+| Phase | Duration | What happens |
+|-------|----------|-------------|
+| **Open** | ~2.75 min | Trading and predictions are live. Prediction window closes at 10:30 AM game time. |
+| **Closing warning** | ~30s | Last chance to trade before the day ends. |
+| **Frozen** | ~10s | Day is settling. Trading is locked. |
+| **Results** | ~15s | Day summary shows best/worst fund, returns, and top player. |
+
+The next day opens automatically after results.
+
+### Winning
+
+Compete on the **leaderboard** — ranked by total portfolio value (cash + fund holdings). Beat the other players and the fund managers themselves.
 
 ## Current Functionality
 
-- **Fund-share trading** — players buy and sell public fund shares through `buy_fund` / `sell_fund`.
-- **Hidden fund managers** — three LLM-managed funds use conservative, moderate, and aggressive trading styles.
-- **Scripted funds** — deterministic/script-managed funds act as non-LLM competitors and decoys.
-- **Randomized public fund names** — manager identities are presented as mutual-fund-style public names for the session.
-- **Underlying stock market** — fund managers trade NVDA, AAPL, GOOGL, MSFT, and AMZN; stock prices move with trade impact.
-- **NAV-backed fund prices** — each fund share price derives from the manager's underlying portfolio value divided by total fund shares.
-- **Limited public float** — each fund has a fixed available share float players can buy from and sell back into.
-- **Player portfolio** — players start with $10,000 and track cash, fund holdings value, total return, private trades, and 24h portfolio history.
-- **Public leaderboard** — ranks players and fund managers by estimated portfolio value.
-- **Market signals** — AI-generated or manual market headlines can react to trading activity without naming human players.
-- **AI settings** — a shared OpenAI/OpenRouter key is stored in SpacetimeDB via `global_ai_config`.
-- **Componentized frontend** — React UI is split into focused `components/` and deterministic `utils/`.
-- **Unit tests** — deterministic finance, chart, fund-pricing, and market-math helpers are covered with Vitest.
+- **Fund-share trading** — buy and sell public fund shares with real-time price updates.
+- **Five anonymous funds** — three LLM-managed and two scripted, all presented with randomized mutual-fund-style names.
+- **Distinct fund strategies** — LLM funds use conservative/moderate/aggressive styles via daily trading plans. Scripted funds use sector rotation and momentum-chasing strategies.
+- **Information hiding** — fund types, risk profiles, and manager reasoning are hidden from players. Only public signals (prices, trades, news) are visible.
+- **Daily predictions** — pick best/worst fund each day for cash bonuses, with history and leaderboard tracking.
+- **Day close results** — each day ends with a summary phase showing best/worst fund performance and top player.
+- **NAV-backed fund pricing** — fund share prices derive from each manager's underlying stock portfolio.
+- **AI market news** — LLM-generated headlines react to trading activity without revealing player or manager identities.
+- **24h portfolio history chart** — track your portfolio performance over time.
+- **Anti-leakage LLM prompts** — bot prompts use public aliases, include anti-collusion rules, and do not expose strategy types.
+- **Unit tests** — deterministic finance, chart, fund-pricing, game-day, and prediction helpers covered with Vitest.
 
 ## Prerequisites
 
@@ -60,51 +106,6 @@ The AI key lives in the server (`global_ai_config` table), not in git.
 
 Only one global key is needed for the shared DB. Do not commit keys.
 
-## How Gameplay Works
-
-### Player Loop
-
-Players do not directly trade the underlying stocks in the current UI. They:
-
-1. Review public fund names, prices, day returns, and available float.
-2. Read market signals and manager tape activity.
-3. Buy or sell fund shares.
-4. Compete on total portfolio value.
-
-### Fund Managers
-
-There are five public funds today:
-
-- Three LLM-managed funds: conservative, moderate, aggressive.
-- Two scripted funds: deterministic market participants/decoys.
-
-Managers have large starting balances and trade the underlying stock market. Their public names are randomized mutual-fund-style labels, while their internal manager type is hidden from the player-facing concept.
-
-### Fund Pricing
-
-Each fund has:
-
-- `total_shares`
-- `available_shares`
-- `nav_cents`
-- `price_cents`
-
-The current share price is derived from:
-
-```text
-fund price = manager portfolio NAV / total shares
-```
-
-Player fund trades update player cash, private fund holdings, private fund trade history, and the fund's available public float.
-
-### Underlying Market
-
-The underlying stock market still exists and drives fund performance:
-
-- Seed stocks: NVDA, AAPL, GOOGL, MSFT, AMZN
-- Buys and sells apply basis-point price impact.
-- Fund manager portfolios are valued from cash plus stock holdings.
-
 ## Project Structure
 
 ```text
@@ -112,10 +113,11 @@ market-sim/
 ├── spacetimedb/src/
 │   ├── index.ts              # SpacetimeDB schema, reducers, views, timers
 │   ├── ai_trader_llm.ts      # LLM prompt + response parsing
+│   ├── ai_trading_plan.ts    # Daily trading plan LLM prompt + parsing
 │   ├── ai_market_news.ts     # AI news prompt + response parsing
 │   ├── llm.ts                # OpenAI/OpenRouter HTTP helpers
 │   ├── models/               # Fund and AI-manager definitions
-│   └── utils/                # Deterministic backend helpers
+│   └── utils/                # Deterministic backend helpers (game_day, predictions, etc.)
 ├── src/
 │   ├── App.tsx               # Data wiring / main page composition
 │   ├── components/           # React UI components
@@ -133,8 +135,9 @@ market-sim/
 | Reducer | Description |
 |---------|-------------|
 | `buy_fund` / `sell_fund` | Player fund-share trading |
-| `buy_stock` / `sell_stock` | Underlying stock execution path, mainly used by managers |
+| `buy_stock` / `sell_stock` | Underlying stock execution, mainly used by managers |
 | `set_name` | Player leaderboard nickname |
+| `submit_prediction` | Daily best/worst fund prediction |
 | `set_global_ai_config` | Shared LLM provider/key/model settings |
 | `seed_market` | Idempotently seeds stocks, managers, funds, and timers |
 
@@ -145,21 +148,26 @@ market-sim/
 | `generate_demo_news` | Generate a manual AI market headline |
 | `get_global_ai_config_status` | Check whether shared AI config exists |
 | `test_global_ai_connection` | Ping OpenAI/OpenRouter |
-| `ai_trader_nova_tick` | Scheduled tick for the conservative LLM manager timer slot |
-| `ai_trader_pulse_tick` | Scheduled tick for the moderate LLM manager timer slot |
-| `ai_trader_apex_tick` | Scheduled tick for the aggressive LLM manager |
+| `ai_trader_nova_tick` | Scheduled tick for LLM manager timer slot 1 |
+| `ai_trader_pulse_tick` | Scheduled tick for LLM manager timer slot 2 |
+| `ai_trader_apex_tick` | Scheduled tick for LLM manager timer slot 3 |
 | `ai_market_news_tick` | Scheduled AI news desk check |
 
 ### Public Tables / Views
 
 | View/Table | Description |
 |------------|-------------|
-| `market_funds` | Public fund market: name, symbol, NAV, price, float |
-| `my_fund_holdings` / `my_fund_trades` | Private player fund positions and fund trade history |
-| `my_account` / `my_portfolio_history` | Private player cash and portfolio history |
+| `market_funds` | Public fund market: name, symbol, NAV, price, float (type/risk hidden) |
+| `market_clock` | Current game day, phase, time, countdown |
+| `latest_day_summary` | Most recent day close summary (best/worst fund, top player) |
+| `my_fund_holdings` / `my_fund_trades` | Private player fund positions and trade history |
+| `my_account` / `my_portfolio_history` | Private player cash and portfolio snapshots |
+| `my_daily_prediction` | Current day prediction (if submitted) |
+| `prediction_results` | Last 10 settled predictions for the player |
+| `prediction_leaderboard` | Public prediction accuracy rankings |
 | `leaderboard` | Public ranking by estimated portfolio value |
 | `ai_trader_log` | Public manager trade tape |
-| `ai_trader_minds` | Public manager status rows |
+| `ai_trader_minds` | Public manager status (reasoning/source hidden) |
 | `market_stocks` | Public underlying stock prices |
 | `recent_market_news` | Public market signal feed |
 
@@ -217,18 +225,12 @@ spacetime call --server maincloud market-sim-69q12 seed_market
 | Bots/managers not trading | Check `spacetime logs market-sim-69q12 -f`; verify AI settings if LLM mode is expected |
 | OpenAI quota errors | Add billing/credits or use OpenRouter |
 
-## TODOs Against Initial Spec
+## Remaining TODOs
 
-- **True daily round system** — current code uses UTC trading-day fields and live ticks, but there is no explicit round start/end, day close summary, or locked trading window.
-- **Player prediction mechanic** — players can trade fund shares, but there is not yet a separate "predict what to buy/sell today" objective, scoring rule, or prediction submission history.
-- **Stronger information hiding** — the UI hides explicit bot names, but some fields still expose risk/profile text and manager tape details that may be too revealing for the intended mystery.
-- **Fund naming per session** — aliases are deterministic from the trading day; there is no explicit session entity with its own seed, reset, or replay lifecycle.
-- **Share issuance controls** — funds have a fixed float, but there is no admin/reset flow for replenishing float or creating new fund seasons.
-- **LLM behavior tuning** — prompts are functional, but they should be revisited for the final game objective, risk constraints, and anti-collusion/anti-leakage rules.
-- **Script-managed fund diversity** — scripted funds exist, but their strategies are still simple and should be expanded so they are convincing decoys.
-- **Player onboarding/copy** — the UI is usable, but needs clearer game framing without exposing hidden mechanics.
+- **Fund naming per session** — aliases rotate daily; no explicit session entity with its own seed, reset, or replay lifecycle.
+- **Share issuance controls** — funds have a fixed float but no admin/reset flow for replenishing it.
 - **End-to-end tests** — deterministic unit tests exist; browser/SpacetimeDB integration tests are still missing.
-- **Operational admin tools** — no admin UI yet for resetting seasons, rotating fund aliases, inspecting manager internals, or controlling AI/news schedules.
+- **Operational admin tools** — no admin UI yet for resetting seasons, rotating fund aliases, or controlling AI schedules.
 
 ## Further Reading
 

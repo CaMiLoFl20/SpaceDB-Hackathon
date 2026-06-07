@@ -54,8 +54,10 @@ import * as TestGlobalAiConnectionProcedure from "./test_global_ai_connection_pr
 import AiNewsStatusRow from "./ai_news_status_table";
 import AiTraderLogRow from "./ai_trader_log_table";
 import AiTraderMindsRow from "./ai_trader_minds_table";
+import DaySummaryRow from "./day_summary_table";
 import FundRow from "./fund_table";
 import KeyArticleRow from "./key_article_table";
+import LatestDaySummaryRow from "./latest_day_summary_table";
 import LeaderboardRow from "./leaderboard_table";
 import MarketNewsRow from "./market_news_table";
 import MarketClockRow from "./market_clock_table";
@@ -70,6 +72,7 @@ import MyPlayerRow from "./my_player_table";
 import MyPortfolioHistoryRow from "./my_portfolio_history_table";
 import MyTradesRow from "./my_trades_table";
 import PlayerDirectoryRow from "./player_directory_table";
+import PredictionLeaderboardRow from "./prediction_leaderboard_table";
 import PredictionResultsRow from "./prediction_results_table";
 import RecentTradeRow from "./recent_trade_table";
 import RecentMarketNewsRow from "./recent_market_news_table";
@@ -79,6 +82,20 @@ import StockRow from "./stock_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  daySummary: __table({
+    name: 'day_summary',
+    indexes: [
+      { accessor: 'dayIndex', name: 'day_summary_day_index_idx_btree', algorithm: 'btree', columns: [
+        'dayIndex',
+      ] },
+      { accessor: 'id', name: 'day_summary_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'day_summary_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, DaySummaryRow),
   fund: __table({
     name: 'fund',
     indexes: [
@@ -185,6 +202,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, AiTraderMindsRow),
+  latest_day_summary: __table({
+    name: 'latest_day_summary',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, LatestDaySummaryRow),
   leaderboard: __table({
     name: 'leaderboard',
     indexes: [
@@ -269,6 +293,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyTradesRow),
+  prediction_leaderboard: __table({
+    name: 'prediction_leaderboard',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, PredictionLeaderboardRow),
   prediction_results: __table({
     name: 'prediction_results',
     indexes: [

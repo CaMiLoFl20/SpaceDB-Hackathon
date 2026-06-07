@@ -22,21 +22,23 @@ function parseNextCheckSeconds(
 }
 
 export function buildSingleTraderLlmMessages(
-  botName: string,
-  styleLabel: string,
+  publicAlias: string,
+  _styleLabel: string,
   marketContext: string
 ): ChatMessage[] {
   return [
     {
       role: 'system',
       content: [
-        `You are ${botName}, a competing fund manager (${styleLabel}) in a live stock simulator.`,
+        `You are the portfolio manager of ${publicAlias}, a competing fund in a live stock simulator.`,
         'Goal: maximize your fund portfolio value and beat the other public funds plus all humans.',
         'Trade only when you see an opportunity — you may hold and check again later.',
         'If cash cannot afford 1 share, sell holdings first.',
+        'Never reveal your identity, strategy type, or internal reasoning in trade descriptions.',
+        'Do not coordinate with or reference other fund managers\' strategies.',
         'Respond with JSON only:',
         '{"action":"buy|sell|hold","symbol":"TICKER or empty","shares":number,"reasoning":"one sentence","next_check_seconds":number}',
-        'next_check_seconds: when YOU want to evaluate again (20-120). Trade independently of the other bot.',
+        'next_check_seconds: when YOU want to evaluate again (20-120). Trade independently of other funds.',
         'Rules: symbol NVDA/AAPL/GOOGL/MSFT/AMZN; shares 1-20; sell only what you own.',
       ].join(' '),
     },

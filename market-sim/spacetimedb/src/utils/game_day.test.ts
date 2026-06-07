@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FREEZE_MICROS,
+  RESULTS_MICROS,
   GAME_DAY_CLOSE_MINUTE,
   GAME_DAY_OPEN_MINUTE,
   OPEN_SESSION_MICROS,
@@ -25,8 +26,16 @@ describe('game day clock', () => {
     expect(state.tradesAllowed).toBe(false);
   });
 
-  it('rolls after open session plus freeze', () => {
-    expect(shouldRollToNextDay(0n, OPEN_SESSION_MICROS + FREEZE_MICROS)).toBe(true);
+  it('enters results phase after freeze', () => {
+    const state = deriveGameClockState(0n, OPEN_SESSION_MICROS + FREEZE_MICROS);
+    expect(state.phase).toBe('results');
+    expect(state.tradesAllowed).toBe(false);
+    expect(state.secondsUntilNextDay).toBeGreaterThan(0n);
+  });
+
+  it('rolls after open session plus freeze plus results', () => {
+    expect(shouldRollToNextDay(0n, OPEN_SESSION_MICROS + FREEZE_MICROS + RESULTS_MICROS)).toBe(true);
+    expect(shouldRollToNextDay(0n, OPEN_SESSION_MICROS + FREEZE_MICROS)).toBe(false);
   });
 
   it('formats game minutes', () => {

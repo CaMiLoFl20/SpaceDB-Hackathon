@@ -138,6 +138,19 @@ export const DailyPredictionViewRow = __t.object("DailyPredictionViewRow", {
 });
 export type DailyPredictionViewRow = __Infer<typeof DailyPredictionViewRow>;
 
+export const DaySummary = __t.object("DaySummary", {
+  id: __t.u64(),
+  dayIndex: __t.u64(),
+  bestFundSymbol: __t.string(),
+  worstFundSymbol: __t.string(),
+  bestFundReturnBps: __t.i64(),
+  worstFundReturnBps: __t.i64(),
+  topPlayerName: __t.string(),
+  topPlayerValueCents: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type DaySummary = __Infer<typeof DaySummary>;
+
 export const Fund = __t.object("Fund", {
   symbol: __t.string(),
   name: __t.string(),
@@ -247,6 +260,9 @@ export const KeyArticle = __t.object("KeyArticle", {
   createdAt: __t.timestamp(),
 });
 export type KeyArticle = __Infer<typeof KeyArticle>;
+
+export const LatestDaySummary = __t.object("LatestDaySummary", {});
+export type LatestDaySummary = __Infer<typeof LatestDaySummary>;
 
 export const Leaderboard = __t.object("Leaderboard", {});
 export type Leaderboard = __Infer<typeof Leaderboard>;
@@ -388,6 +404,18 @@ export const PortfolioSnapshot = __t.object("PortfolioSnapshot", {
   recordedAt: __t.timestamp(),
 });
 export type PortfolioSnapshot = __Infer<typeof PortfolioSnapshot>;
+
+export const PredictionLeaderboard = __t.object("PredictionLeaderboard", {});
+export type PredictionLeaderboard = __Infer<typeof PredictionLeaderboard>;
+
+export const PredictionLeaderboardRow = __t.object("PredictionLeaderboardRow", {
+  name: __t.string(),
+  totalPredictions: __t.u64(),
+  correctPredictions: __t.u64(),
+  accuracyPct: __t.u64(),
+  totalBonusCents: __t.u64(),
+});
+export type PredictionLeaderboardRow = __Infer<typeof PredictionLeaderboardRow>;
 
 export const PredictionResults = __t.object("PredictionResults", {});
 export type PredictionResults = __Infer<typeof PredictionResults>;

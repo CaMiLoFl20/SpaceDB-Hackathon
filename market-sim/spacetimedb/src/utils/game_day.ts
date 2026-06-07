@@ -7,9 +7,10 @@ export const OPEN_SESSION_MICROS =
   GAME_MINUTES_PER_DAY * REAL_MICROS_PER_GAME_MINUTE;
 export const WARNING_MICROS = 30_000_000n;
 export const FREEZE_MICROS = 10_000_000n;
+export const RESULTS_MICROS = 15_000_000n;
 export const PREDICTION_DEADLINE_MINUTE = 10n * 60n + 30n;
 
-export type GameDayPhase = 'open' | 'closing_warning' | 'frozen';
+export type GameDayPhase = 'open' | 'closing_warning' | 'frozen' | 'results';
 
 export type GameClockState = {
   phase: GameDayPhase;
@@ -26,13 +27,18 @@ export function deriveGameClockState(
 ): GameClockState {
   const elapsed = nowMicros > openedAtMicros ? nowMicros - openedAtMicros : 0n;
   if (elapsed >= OPEN_SESSION_MICROS) {
-    const frozenElapsed = elapsed - OPEN_SESSION_MICROS;
+    const postCloseElapsed = elapsed - OPEN_SESSION_MICROS;
+    const totalPostCloseMicros = FREEZE_MICROS + RESULTS_MICROS;
     const secondsUntilNextDay =
-      frozenElapsed >= FREEZE_MICROS
+      postCloseElapsed >= totalPostCloseMicros
         ? 0n
-        : (FREEZE_MICROS - frozenElapsed + 999_999n) / 1_000_000n;
+        : (totalPostCloseMicros - postCloseElapsed + 999_999n) / 1_000_000n;
+
+    const phase: GameDayPhase =
+      postCloseElapsed < FREEZE_MICROS ? 'frozen' : 'results';
+
     return {
-      phase: 'frozen',
+      phase,
       currentGameMinute: GAME_DAY_CLOSE_MINUTE,
       secondsUntilClose: 0n,
       secondsUntilNextDay,
@@ -68,5 +74,5 @@ export function formatGameMinute(minute: bigint): string {
 
 export function shouldRollToNextDay(openedAtMicros: bigint, nowMicros: bigint): boolean {
   const elapsed = nowMicros > openedAtMicros ? nowMicros - openedAtMicros : 0n;
-  return elapsed >= OPEN_SESSION_MICROS + FREEZE_MICROS;
+  return elapsed >= OPEN_SESSION_MICROS + FREEZE_MICROS + RESULTS_MICROS;
 }

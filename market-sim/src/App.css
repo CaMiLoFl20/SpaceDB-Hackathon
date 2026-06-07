@@ -191,6 +191,19 @@ p {
   background: #fef2f2;
 }
 
+.clock-banner--results {
+  border-color: #a78bfa;
+  background: #f5f3ff;
+}
+
+.clock-banner--results .gain {
+  color: #16a34a;
+}
+
+.clock-banner--results .loss {
+  color: #dc2626;
+}
+
 .clock-banner div {
   display: grid;
   gap: 0.2rem;

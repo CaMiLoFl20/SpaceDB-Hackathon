@@ -47,6 +47,9 @@ function App() {
   const [managerMinds] = useTable(tables.ai_trader_minds);
   const [marketClockRows] = useTable(tables.market_clock);
   const [dailyPredictions] = useTable(tables.my_daily_prediction);
+  const [daySummaries] = useTable(tables.latest_day_summary);
+  const [predictionResults] = useTable(tables.prediction_results);
+  const [predictionLeaderboard] = useTable(tables.prediction_leaderboard);
 
   const seedMarket = useReducer(reducers.seedMarket);
   const setName = useReducer(reducers.setName);
@@ -317,7 +320,7 @@ function App() {
         <section className="welcome-card">
           <p className="muted">Fund Floor</p>
           <h1>Welcome</h1>
-          <p>You start with <strong>{formatMoney(STARTING_CAPITAL_CENTS)}</strong>. Pick a nickname to join the market.</p>
+          <p>Welcome to Fund Floor. Multiple funds compete in the market — some managed by AI, some by algorithms, all anonymous. Trade fund shares, predict daily winners, and grow your <strong>{formatMoney(STARTING_CAPITAL_CENTS)}</strong> portfolio. Pick a nickname to join.</p>
           {nameError && <p className="error-text">{nameError}</p>}
           <NameForm onSubmit={saveName} />
         </section>
@@ -365,7 +368,7 @@ function App() {
         testingConnection={aiSettingsTesting}
       />
 
-      <MarketClockBanner clock={marketClock} />
+      <MarketClockBanner clock={marketClock} daySummary={daySummaries[0]} funds={sortedFunds} />
 
       <section className="hero-panel">
         <div className="hero-header">
@@ -391,7 +394,7 @@ function App() {
       <section className="main-grid">
         <article className="panel market-panel">
           <h2>Fund market</h2>
-          <p className="muted">Funds trade the underlying market. Public names rotate by session; manager type is not revealed.</p>
+          <p className="muted">Funds trade the underlying market. Public names rotate each day. Can you spot the patterns?</p>
           <FundMarketTable funds={sortedFunds} selectedSymbol={activeSymbol} onSelect={setSelectedSymbol} />
         </article>
         <TradeTicket
@@ -420,6 +423,8 @@ function App() {
           prediction={dailyPrediction}
           predictionsAllowed={marketClock?.predictionsAllowed ?? false}
           submitting={submitting}
+          history={predictionResults}
+          leaderboard={predictionLeaderboard}
         />
       </section>
 

@@ -24,17 +24,19 @@ export function maxPlanSharesForRisk(riskProfile: FundRiskProfile): bigint {
 }
 
 export function buildTradingPlanLlmMessages(
-  managerName: string,
-  styleLabel: string,
+  publicAlias: string,
+  _styleLabel: string,
   marketContext: string
 ): ChatMessage[] {
   return [
     {
       role: 'system',
       content: [
-        `You are ${managerName}, a competing fund manager (${styleLabel}).`,
+        `You are the portfolio manager of ${publicAlias}, a competing fund.`,
         'Create a private trading plan for one compressed trading day.',
         'The simulated market is open from 9:30 AM to 4:00 PM ET.',
+        'Never reveal your identity, strategy type, or internal reasoning in trade descriptions.',
+        'Do not coordinate with or reference other fund managers\' strategies.',
         'Return JSON only:',
         '{"thesis":"one sentence","risk_posture":"one sentence","steps":[{"game_minute":570,"action":"buy|sell|hold","symbol":"NVDA|AAPL|GOOGL|MSFT|AMZN or empty","shares":number,"reasoning":"one sentence"}]}',
         'Create exactly 6 steps. Use game_minute from 570 through 955. A hold step may use empty symbol and 0 shares.',
