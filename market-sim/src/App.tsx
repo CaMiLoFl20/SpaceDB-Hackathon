@@ -68,6 +68,8 @@ function readStoredSoundEnabled(): boolean {
 }
 
 function githubOAuthRedirectUri(): string {
+  const configured = import.meta.env.VITE_GITHUB_OAUTH_REDIRECT_URI?.trim();
+  if (configured) return configured;
   return window.location.origin;
 }
 

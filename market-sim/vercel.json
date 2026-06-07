@@ -6,7 +6,8 @@
   "build": {
     "env": {
       "VITE_SPACETIMEDB_HOST": "https://maincloud.spacetimedb.com",
-      "VITE_SPACETIMEDB_DB_NAME": "market-sim-69q12"
+      "VITE_SPACETIMEDB_DB_NAME": "market-sim-69q12",
+      "VITE_GITHUB_OAUTH_REDIRECT_URI": "https://market-sim-wine.vercel.app"
     }
   }
 }
