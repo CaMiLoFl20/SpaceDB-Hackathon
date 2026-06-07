@@ -82,7 +82,7 @@ function ThemeToggle({
 }
 
 function App() {
-  const { identity, isActive: connected } = useSpacetimeDB();
+  const { identity, isActive: connected, connectionError } = useSpacetimeDB();
   const [accounts] = useTable(tables.my_account);
   const [players] = useTable(tables.my_player);
   const [funds, fundsReady] = useTable(tables.market_funds);
@@ -487,12 +487,28 @@ function App() {
   };
 
   if (!connected || !identity || !account) {
+    const spacetimeHost =
+      import.meta.env.VITE_SPACETIMEDB_HOST ?? 'ws://localhost:3000';
+    const spacetimeDb =
+      import.meta.env.VITE_SPACETIMEDB_DB_NAME ?? 'llm-chat-ts';
+
     return (
       <main className="empty-state full-height">
         <div style={{ display: 'grid', gap: '1rem', justifyItems: 'center' }}>
           <ThemeToggle onToggle={toggleTheme} theme={theme} />
           <h1>Fund Floor</h1>
-          <p>Connecting and opening your account...</p>
+          {connectionError ? (
+            <>
+              <p className="error-text">
+                Could not connect to SpacetimeDB: {connectionError.message}
+              </p>
+              <p className="muted">
+                Server: {spacetimeHost} · Database: {spacetimeDb}
+              </p>
+            </>
+          ) : (
+            <p>Connecting and opening your account...</p>
+          )}
         </div>
       </main>
     );

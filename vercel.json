@@ -3,5 +3,11 @@
   "outputDirectory": "market-sim/dist",
   "installCommand": "cd market-sim && npm install",
   "framework": "vite",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "build": {
+    "env": {
+      "VITE_SPACETIMEDB_HOST": "https://maincloud.spacetimedb.com",
+      "VITE_SPACETIMEDB_DB_NAME": "market-sim-69q12"
+    }
+  }
 }
