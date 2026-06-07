@@ -221,6 +221,36 @@ export const GameDay = __t.object("GameDay", {
 });
 export type GameDay = __Infer<typeof GameDay>;
 
+export const GitHubLoginResult = __t.object("GitHubLoginResult", {
+  ok: __t.bool(),
+  message: __t.string(),
+  username: __t.option(__t.string()),
+  avatarUrl: __t.option(__t.string()),
+});
+export type GitHubLoginResult = __Infer<typeof GitHubLoginResult>;
+
+export const GitHubOAuthStatus = __t.object("GitHubOAuthStatus", {
+  configured: __t.bool(),
+  clientId: __t.option(__t.string()),
+});
+export type GitHubOAuthStatus = __Infer<typeof GitHubOAuthStatus>;
+
+export const GithubOauthConfig = __t.object("GithubOauthConfig", {
+  id: __t.string(),
+  clientId: __t.string(),
+  clientSecret: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type GithubOauthConfig = __Infer<typeof GithubOauthConfig>;
+
+export const GithubProfile = __t.object("GithubProfile", {
+  owner: __t.identity(),
+  githubUsername: __t.string(),
+  githubAvatarUrl: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type GithubProfile = __Infer<typeof GithubProfile>;
+
 export const GlobalAiConfig = __t.object("GlobalAiConfig", {
   id: __t.string(),
   provider: __t.string(),
@@ -369,6 +399,9 @@ export type MyFundHoldings = __Infer<typeof MyFundHoldings>;
 
 export const MyFundTrades = __t.object("MyFundTrades", {});
 export type MyFundTrades = __Infer<typeof MyFundTrades>;
+
+export const MyGithubProfile = __t.object("MyGithubProfile", {});
+export type MyGithubProfile = __Infer<typeof MyGithubProfile>;
 
 export const MyHoldings = __t.object("MyHoldings", {});
 export type MyHoldings = __Infer<typeof MyHoldings>;

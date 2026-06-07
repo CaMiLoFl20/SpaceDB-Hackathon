@@ -7,16 +7,22 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all procedure arg schemas
 import * as GenerateDemoNewsProcedure from "../generate_demo_news_procedure";
+import * as GetGithubOauthStatusProcedure from "../get_github_oauth_status_procedure";
 import * as GetGlobalAiConfigStatusProcedure from "../get_global_ai_config_status_procedure";
 import * as GetLlmConfigStatusProcedure from "../get_llm_config_status_procedure";
+import * as GithubLoginProcedure from "../github_login_procedure";
 import * as TestGlobalAiConnectionProcedure from "../test_global_ai_connection_procedure";
 
 export type GenerateDemoNewsArgs = __Infer<typeof GenerateDemoNewsProcedure.params>;
 export type GenerateDemoNewsResult = __Infer<typeof GenerateDemoNewsProcedure.returnType>;
+export type GetGithubOauthStatusArgs = __Infer<typeof GetGithubOauthStatusProcedure.params>;
+export type GetGithubOauthStatusResult = __Infer<typeof GetGithubOauthStatusProcedure.returnType>;
 export type GetGlobalAiConfigStatusArgs = __Infer<typeof GetGlobalAiConfigStatusProcedure.params>;
 export type GetGlobalAiConfigStatusResult = __Infer<typeof GetGlobalAiConfigStatusProcedure.returnType>;
 export type GetLlmConfigStatusArgs = __Infer<typeof GetLlmConfigStatusProcedure.params>;
 export type GetLlmConfigStatusResult = __Infer<typeof GetLlmConfigStatusProcedure.returnType>;
+export type GithubLoginArgs = __Infer<typeof GithubLoginProcedure.params>;
+export type GithubLoginResult = __Infer<typeof GithubLoginProcedure.returnType>;
 export type TestGlobalAiConnectionArgs = __Infer<typeof TestGlobalAiConnectionProcedure.params>;
 export type TestGlobalAiConnectionResult = __Infer<typeof TestGlobalAiConnectionProcedure.returnType>;
 

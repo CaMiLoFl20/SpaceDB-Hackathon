@@ -39,6 +39,7 @@ import BuyStockReducer from "./buy_stock_reducer";
 import SeedMarketReducer from "./seed_market_reducer";
 import SellFundReducer from "./sell_fund_reducer";
 import SellStockReducer from "./sell_stock_reducer";
+import SetGithubOauthConfigReducer from "./set_github_oauth_config_reducer";
 import SetGlobalAiConfigReducer from "./set_global_ai_config_reducer";
 import SetLlmConfigReducer from "./set_llm_config_reducer";
 import SetNameReducer from "./set_name_reducer";
@@ -46,8 +47,10 @@ import SubmitPredictionReducer from "./submit_prediction_reducer";
 
 // Import all procedure arg schemas
 import * as GenerateDemoNewsProcedure from "./generate_demo_news_procedure";
+import * as GetGithubOauthStatusProcedure from "./get_github_oauth_status_procedure";
 import * as GetGlobalAiConfigStatusProcedure from "./get_global_ai_config_status_procedure";
 import * as GetLlmConfigStatusProcedure from "./get_llm_config_status_procedure";
+import * as GithubLoginProcedure from "./github_login_procedure";
 import * as TestGlobalAiConnectionProcedure from "./test_global_ai_connection_procedure";
 
 // Import all table schema definitions
@@ -56,6 +59,7 @@ import AiTraderLogRow from "./ai_trader_log_table";
 import AiTraderMindsRow from "./ai_trader_minds_table";
 import DaySummaryRow from "./day_summary_table";
 import FundRow from "./fund_table";
+import GithubProfileRow from "./github_profile_table";
 import KeyArticleRow from "./key_article_table";
 import LatestDaySummaryRow from "./latest_day_summary_table";
 import LeaderboardRow from "./leaderboard_table";
@@ -67,6 +71,7 @@ import MyAccountRow from "./my_account_table";
 import MyDailyPredictionRow from "./my_daily_prediction_table";
 import MyFundHoldingsRow from "./my_fund_holdings_table";
 import MyFundTradesRow from "./my_fund_trades_table";
+import MyGithubProfileRow from "./my_github_profile_table";
 import MyHoldingsRow from "./my_holdings_table";
 import MyPlayerRow from "./my_player_table";
 import MyPortfolioHistoryRow from "./my_portfolio_history_table";
@@ -110,6 +115,17 @@ const tablesSchema = __schema({
       { name: 'fund_symbol_key', constraint: 'unique', columns: ['symbol'] },
     ],
   }, FundRow),
+  githubProfile: __table({
+    name: 'github_profile',
+    indexes: [
+      { accessor: 'owner', name: 'github_profile_owner_idx_btree', algorithm: 'btree', columns: [
+        'owner',
+      ] },
+    ],
+    constraints: [
+      { name: 'github_profile_owner_key', constraint: 'unique', columns: ['owner'] },
+    ],
+  }, GithubProfileRow),
   keyArticle: __table({
     name: 'key_article',
     indexes: [
@@ -265,6 +281,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyFundTradesRow),
+  my_github_profile: __table({
+    name: 'my_github_profile',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyGithubProfileRow),
   my_holdings: __table({
     name: 'my_holdings',
     indexes: [
@@ -323,6 +346,7 @@ const reducersSchema = __reducers(
   __reducerSchema("seed_market", SeedMarketReducer),
   __reducerSchema("sell_fund", SellFundReducer),
   __reducerSchema("sell_stock", SellStockReducer),
+  __reducerSchema("set_github_oauth_config", SetGithubOauthConfigReducer),
   __reducerSchema("set_global_ai_config", SetGlobalAiConfigReducer),
   __reducerSchema("set_llm_config", SetLlmConfigReducer),
   __reducerSchema("set_name", SetNameReducer),
@@ -332,8 +356,10 @@ const reducersSchema = __reducers(
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
 const proceduresSchema = __procedures(
   __procedureSchema("generate_demo_news", GenerateDemoNewsProcedure.params, GenerateDemoNewsProcedure.returnType),
+  __procedureSchema("get_github_oauth_status", GetGithubOauthStatusProcedure.params, GetGithubOauthStatusProcedure.returnType),
   __procedureSchema("get_global_ai_config_status", GetGlobalAiConfigStatusProcedure.params, GetGlobalAiConfigStatusProcedure.returnType),
   __procedureSchema("get_llm_config_status", GetLlmConfigStatusProcedure.params, GetLlmConfigStatusProcedure.returnType),
+  __procedureSchema("github_login", GithubLoginProcedure.params, GithubLoginProcedure.returnType),
   __procedureSchema("test_global_ai_connection", TestGlobalAiConnectionProcedure.params, TestGlobalAiConnectionProcedure.returnType),
 );
 

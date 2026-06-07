@@ -130,6 +130,20 @@ const globalAiConfigRow = {
   updatedAt: t.timestamp(),
 };
 
+const githubOAuthConfigRow = {
+  id: t.string().primaryKey(),
+  clientId: t.string(),
+  clientSecret: t.string(),
+  updatedAt: t.timestamp(),
+};
+
+const githubProfileRow = {
+  owner: t.identity().primaryKey(),
+  githubUsername: t.string(),
+  githubAvatarUrl: t.string(),
+  updatedAt: t.timestamp(),
+};
+
 const tickTimerRow = {
   scheduledId: t.u64().primaryKey().autoInc(),
   scheduledAt: t.scheduleAt(),
@@ -421,6 +435,14 @@ const globalAiConfig = table(
   { name: 'global_ai_config', public: false },
   globalAiConfigRow
 );
+const githubOAuthConfig = table(
+  { name: 'github_oauth_config', public: false },
+  githubOAuthConfigRow
+);
+const githubProfile = table(
+  { name: 'github_profile', public: true },
+  githubProfileRow
+);
 const tickTimer = table(
   {
     name: 'tick_timer',
@@ -522,6 +544,8 @@ const portfolioSnapshot = table(
 const spacetimedb = schema({
   llmConfig,
   globalAiConfig,
+  githubOAuthConfig,
+  githubProfile,
   tickTimer,
   gameClockTimer,
   marketActivityTimer,
@@ -3111,6 +3135,12 @@ export const my_player = spacetimedb.view(
   ctx => ctx.db.playerDirectory.owner.find(ctx.sender) ?? undefined
 );
 
+export const my_github_profile = spacetimedb.view(
+  { name: 'my_github_profile', public: true },
+  githubProfile.rowType.optional(),
+  ctx => ctx.db.githubProfile.owner.find(ctx.sender) ?? undefined
+);
+
 export const recent_market_news = spacetimedb.view(
   { name: 'recent_market_news', public: true },
   t.array(marketNews.rowType),
@@ -3573,6 +3603,171 @@ export const set_global_ai_config = spacetimedb.reducer(
     setSchedulerState(ctx, 'harbor_trader', false, '');
     setSchedulerState(ctx, 'apex_trader', false, '');
     ensureAiTraderTimersSeeded(ctx);
+  }
+);
+
+// --- GitHub OAuth ---
+
+const GITHUB_OAUTH_CONFIG_ID = 'global';
+
+export const set_github_oauth_config = spacetimedb.reducer(
+  { clientId: t.string(), clientSecret: t.string() },
+  (ctx, { clientId, clientSecret }) => {
+    const row = {
+      id: GITHUB_OAUTH_CONFIG_ID,
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+      updatedAt: ctx.timestamp,
+    };
+    const existing = ctx.db.githubOAuthConfig.id.find(GITHUB_OAUTH_CONFIG_ID);
+    if (existing) {
+      ctx.db.githubOAuthConfig.id.update(row);
+    } else {
+      ctx.db.githubOAuthConfig.insert(row);
+    }
+  }
+);
+
+export const github_login = spacetimedb.procedure(
+  { code: t.string() },
+  t.object('GitHubLoginResult', {
+    ok: t.bool(),
+    message: t.string(),
+    username: t.string().optional(),
+    avatarUrl: t.string().optional(),
+  }),
+  (ctx, { code }) => {
+
+    const config = ctx.withTx(tx =>
+      tx.db.githubOAuthConfig.id.find(GITHUB_OAUTH_CONFIG_ID)
+    );
+    if (!config) {
+      return { ok: false, message: 'GitHub OAuth is not configured.', username: undefined, avatarUrl: undefined };
+    }
+
+    // Exchange the authorization code for an access token
+    let tokenRes: { status: number; text(): string };
+    try {
+      tokenRes = ctx.http.fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          code: code.trim(),
+        }),
+      });
+    } catch (err) {
+      return { ok: false, message: `Token exchange failed: ${err instanceof Error ? err.message : String(err)}`, username: undefined, avatarUrl: undefined };
+    }
+
+    if (tokenRes.status < 200 || tokenRes.status >= 300) {
+      return { ok: false, message: `GitHub token HTTP ${tokenRes.status}`, username: undefined, avatarUrl: undefined };
+    }
+
+    let accessToken: string;
+    try {
+      const tokenBody = JSON.parse(tokenRes.text());
+      if (tokenBody.error) {
+        return { ok: false, message: `GitHub: ${tokenBody.error_description ?? tokenBody.error}`, username: undefined, avatarUrl: undefined };
+      }
+      accessToken = tokenBody.access_token;
+      if (!accessToken) {
+        return { ok: false, message: 'No access_token in GitHub response', username: undefined, avatarUrl: undefined };
+      }
+    } catch {
+      return { ok: false, message: 'Failed to parse GitHub token response', username: undefined, avatarUrl: undefined };
+    }
+
+    // Fetch the GitHub user profile
+    let userRes: { status: number; text(): string };
+    try {
+      userRes = ctx.http.fetch('https://api.github.com/user', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+          'User-Agent': 'FundFloor-SpacetimeDB',
+        },
+      });
+    } catch (err) {
+      return { ok: false, message: `GitHub user fetch failed: ${err instanceof Error ? err.message : String(err)}`, username: undefined, avatarUrl: undefined };
+    }
+
+    if (userRes.status < 200 || userRes.status >= 300) {
+      return { ok: false, message: `GitHub user API HTTP ${userRes.status}`, username: undefined, avatarUrl: undefined };
+    }
+
+    let username: string;
+    let avatarUrl: string;
+    try {
+      const userBody = JSON.parse(userRes.text());
+      username = String(userBody.login ?? '');
+      avatarUrl = String(userBody.avatar_url ?? '');
+      if (!username) {
+        return { ok: false, message: 'GitHub user has no login', username: undefined, avatarUrl: undefined };
+      }
+    } catch {
+      return { ok: false, message: 'Failed to parse GitHub user response', username: undefined, avatarUrl: undefined };
+    }
+
+    // Store profile and set player name
+    ctx.withTx(tx => {
+      const existing = tx.db.githubProfile.owner.find(tx.sender);
+      const row = {
+        owner: tx.sender,
+        githubUsername: username,
+        githubAvatarUrl: avatarUrl,
+        updatedAt: tx.timestamp,
+      };
+      if (existing) {
+        tx.db.githubProfile.owner.update(row);
+      } else {
+        tx.db.githubProfile.insert(row);
+      }
+
+      // Auto-set player name to GitHub username if not already named
+      const player = tx.db.playerDirectory.owner.find(tx.sender);
+      if (!player) {
+        const nameKey = username.toLowerCase();
+        const taken = tx.db.playerDirectory.nameKey.find(nameKey);
+        const displayName = taken ? `${username}-gh` : username;
+        tx.db.playerDirectory.insert({
+          owner: tx.sender,
+          name: displayName.slice(0, 20),
+          nameKey: displayName.toLowerCase().slice(0, 20),
+          updatedAt: tx.timestamp,
+        });
+      }
+
+      // Ensure account exists
+      if (!tx.db.account.owner.find(tx.sender)) {
+        tx.db.account.insert({
+          owner: tx.sender,
+          balanceCents: STARTING_BALANCE_CENTS,
+          updatedAt: tx.timestamp,
+        });
+      }
+    });
+
+    return { ok: true, message: `Signed in as ${username}`, username, avatarUrl };
+  }
+);
+
+export const get_github_oauth_status = spacetimedb.procedure(
+  {},
+  t.object('GitHubOAuthStatus', { configured: t.bool(), clientId: t.string().optional() }),
+  ctx => {
+    const config = ctx.withTx(tx =>
+      tx.db.githubOAuthConfig.id.find(GITHUB_OAUTH_CONFIG_ID)
+    );
+    return {
+      configured: config != null,
+      clientId: config?.clientId,
+    };
   }
 );
 

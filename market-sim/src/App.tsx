@@ -50,6 +50,7 @@ function App() {
   const [daySummaries] = useTable(tables.latest_day_summary);
   const [predictionResults] = useTable(tables.prediction_results);
   const [predictionLeaderboard] = useTable(tables.prediction_leaderboard);
+  const [githubProfiles] = useTable(tables.my_github_profile);
 
   const seedMarket = useReducer(reducers.seedMarket);
   const setName = useReducer(reducers.setName);
@@ -60,6 +61,8 @@ function App() {
   const generateDemoNews = useProcedure(procedures.generateDemoNews);
   const getGlobalAiConfigStatus = useProcedure(procedures.getGlobalAiConfigStatus);
   const testGlobalAiConnection = useProcedure(procedures.testGlobalAiConnection);
+  const githubLogin = useProcedure(procedures.githubLogin);
+  const getGithubOauthStatus = useProcedure(procedures.getGithubOauthStatus);
 
   const account = accounts[0];
   const me = players[0];
@@ -87,6 +90,9 @@ function App() {
     model: defaultModel('openai'),
     systemPrompt: '',
   });
+  const [githubClientId, setGithubClientId] = useState('');
+  const [githubLoggingIn, setGithubLoggingIn] = useState(false);
+  const [githubError, setGithubError] = useState('');
 
   useEffect(() => {
     if (!connected || !fundsReady || funds.length > 0 || seedAttempted.current) return;
@@ -95,6 +101,39 @@ function App() {
       seedAttempted.current = false;
     });
   }, [connected, fundsReady, funds.length, seedMarket]);
+
+  // Fetch GitHub OAuth client ID on connect
+  useEffect(() => {
+    if (!connected) return;
+    getGithubOauthStatus().then(result => {
+      if (result.configured && result.clientId) {
+        setGithubClientId(result.clientId);
+      }
+    }).catch(() => {});
+  }, [connected, getGithubOauthStatus]);
+
+  // Handle GitHub OAuth redirect (?code=...)
+  const githubCodeHandled = useRef(false);
+  useEffect(() => {
+    if (!connected || githubCodeHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (!code) return;
+    githubCodeHandled.current = true;
+    // Clean the URL
+    window.history.replaceState({}, '', window.location.pathname);
+    setGithubLoggingIn(true);
+    setGithubError('');
+    githubLogin({ code }).then(result => {
+      setGithubLoggingIn(false);
+      if (!result.ok) {
+        setGithubError(result.message);
+      }
+    }).catch(err => {
+      setGithubLoggingIn(false);
+      setGithubError(errorMessage(err));
+    });
+  }, [connected, githubLogin]);
 
   useEffect(() => {
     if (!connected) return;
@@ -112,6 +151,7 @@ function App() {
   const activeFund = sortedFunds.find(row => row.symbol === activeSymbol);
   const marketClock = marketClockRows[0];
   const dailyPrediction = dailyPredictions[0];
+  const githubProfile = githubProfiles.length > 0 ? githubProfiles[0] : undefined;
 
   const cashBalance = clampNonNegativeCents(account?.balanceCents ?? 0n);
   const fundHoldingsValue = clampNonNegativeCents(
@@ -315,12 +355,40 @@ function App() {
   }
 
   if (!me) {
+    const startGithubLogin = () => {
+      if (!githubClientId) return;
+      const redirectUri = window.location.origin + window.location.pathname;
+      window.location.href = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user`;
+    };
+
     return (
       <main className="welcome-screen">
         <section className="welcome-card">
           <p className="muted">Fund Floor</p>
           <h1>Welcome</h1>
-          <p>Welcome to Fund Floor. Multiple funds compete in the market — some managed by AI, some by algorithms, all anonymous. Trade fund shares, predict daily winners, and grow your <strong>{formatMoney(STARTING_CAPITAL_CENTS)}</strong> portfolio. Pick a nickname to join.</p>
+          <p>Welcome to Fund Floor. Multiple funds compete in the market — some managed by AI, some by algorithms, all anonymous. Trade fund shares, predict daily winners, and grow your <strong>{formatMoney(STARTING_CAPITAL_CENTS)}</strong> portfolio.</p>
+
+          {githubClientId && (
+            <div className="github-login-section">
+              <button
+                className="github-login-btn"
+                disabled={githubLoggingIn}
+                onClick={startGithubLogin}
+                type="button"
+              >
+                <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+                {githubLoggingIn ? 'Signing in...' : 'Sign in with GitHub'}
+              </button>
+              {githubError && <p className="error-text">{githubError}</p>}
+            </div>
+          )}
+
+          <div className="login-divider">
+            <span className="muted">{githubClientId ? 'or pick a nickname' : 'Pick a nickname to join'}</span>
+          </div>
+
           {nameError && <p className="error-text">{nameError}</p>}
           <NameForm onSubmit={saveName} />
         </section>
@@ -342,6 +410,15 @@ function App() {
           <button onClick={() => setAiSettingsOpen(true)} type="button">
             AI Settings {globalAiConfigured ? '✓' : ''}
           </button>
+          {githubProfile?.githubAvatarUrl && (
+            <img
+              src={githubProfile.githubAvatarUrl}
+              alt={githubProfile.githubUsername}
+              className="github-avatar"
+              width={28}
+              height={28}
+            />
+          )}
           <strong>{me.name}</strong>
         </div>
       </header>
