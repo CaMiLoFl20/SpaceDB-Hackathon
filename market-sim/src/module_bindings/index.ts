@@ -59,6 +59,7 @@ import AiTraderLogRow from "./ai_trader_log_table";
 import AiTraderMindsRow from "./ai_trader_minds_table";
 import DaySummaryRow from "./day_summary_table";
 import FundRow from "./fund_table";
+import FundConstituentsRow from "./fund_constituents_table";
 import GithubProfileRow from "./github_profile_table";
 import KeyArticleRow from "./key_article_table";
 import LatestDaySummaryRow from "./latest_day_summary_table";
@@ -218,6 +219,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, AiTraderMindsRow),
+  fund_constituents: __table({
+    name: 'fund_constituents',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, FundConstituentsRow),
   latest_day_summary: __table({
     name: 'latest_day_summary',
     indexes: [

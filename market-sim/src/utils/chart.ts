@@ -1,7 +1,19 @@
 import { STARTING_CAPITAL_CENTS, clampNonNegativeCents, formatMoney, formatReturn } from './finance';
 
-const HOUR_MICROS = 3_600_000_000n;
-const PORTFOLIO_CHART_HOURS = 24;
+const GAME_HOUR_MICROS = 30_000_000n;
+const MAX_CHART_POINTS = 180;
+
+export type PortfolioChartRange = 'day' | 'week' | 'month' | 'year';
+
+export const PORTFOLIO_CHART_RANGES: Record<
+  PortfolioChartRange,
+  { label: string; gameHours: number }
+> = {
+  day: { label: '24h', gameHours: 24 },
+  week: { label: 'Week', gameHours: 24 * 7 },
+  month: { label: 'Month', gameHours: 24 * 30 },
+  year: { label: 'Year', gameHours: 24 * 365 },
+};
 
 export type PortfolioSnapshot = {
   hourStartMicros: bigint;
@@ -14,36 +26,63 @@ export type PortfolioChartPoint = PortfolioSnapshot & {
 
 function hourStartMicrosFromMs(ms: number): bigint {
   const micros = BigInt(ms) * 1000n;
-  return (micros / HOUR_MICROS) * HOUR_MICROS;
+  return (micros / GAME_HOUR_MICROS) * GAME_HOUR_MICROS;
+}
+
+function chartStepGameHours(range: PortfolioChartRange): number {
+  const hours = PORTFOLIO_CHART_RANGES[range].gameHours;
+  return Math.max(1, Math.ceil(hours / MAX_CHART_POINTS));
+}
+
+function formatGameRangeLabel(hourOffset: number, stepHours: number): string {
+  if (stepHours < 24) return `-${hourOffset}h`;
+  const days = Math.round(hourOffset / 24);
+  if (days < 31) return `-${days}d`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `-${months}mo`;
+  return `-${Math.round(days / 365)}y`;
 }
 
 export function buildPortfolioChartSeries(
   snapshots: readonly PortfolioSnapshot[],
   livePortfolioCents: bigint,
-  nowMs: number
+  nowMs: number,
+  range: PortfolioChartRange = 'day'
 ): PortfolioChartPoint[] {
   const currentHourStart = hourStartMicrosFromMs(nowMs);
-  const snapshotByHour = new Map<string, bigint>();
-
-  for (const row of snapshots) {
-    snapshotByHour.set(row.hourStartMicros.toString(), row.portfolioValueCents);
-  }
-  snapshotByHour.set(currentHourStart.toString(), livePortfolioCents);
+  const sortedSnapshots = [
+    ...snapshots.map(row => ({
+      hourStartMicros: row.hourStartMicros,
+      portfolioValueCents: row.portfolioValueCents,
+    })),
+    { hourStartMicros: currentHourStart, portfolioValueCents: livePortfolioCents },
+  ].sort((left, right) => {
+    if (left.hourStartMicros < right.hourStartMicros) return -1;
+    if (left.hourStartMicros > right.hourStartMicros) return 1;
+    return 0;
+  });
 
   let lastValue = STARTING_CAPITAL_CENTS;
+  let snapshotIndex = 0;
   const points: PortfolioChartPoint[] = [];
+  const rangeHours = PORTFOLIO_CHART_RANGES[range].gameHours;
+  const stepHours = chartStepGameHours(range);
+  const firstOffset = Math.ceil((rangeHours - 1) / stepHours) * stepHours;
 
-  for (let offset = PORTFOLIO_CHART_HOURS - 1; offset >= 0; offset -= 1) {
-    const hourStart = currentHourStart - BigInt(offset) * HOUR_MICROS;
-    const key = hourStart.toString();
-    if (snapshotByHour.has(key)) lastValue = snapshotByHour.get(key)!;
+  for (let offset = firstOffset; offset >= 0; offset -= stepHours) {
+    const hourStart = currentHourStart - BigInt(offset) * GAME_HOUR_MICROS;
+    while (
+      snapshotIndex < sortedSnapshots.length &&
+      sortedSnapshots[snapshotIndex]!.hourStartMicros <= hourStart
+    ) {
+      lastValue = sortedSnapshots[snapshotIndex]!.portfolioValueCents;
+      snapshotIndex += 1;
+    }
 
     points.push({
       hourStartMicros: hourStart,
       portfolioValueCents: lastValue,
-      label: new Date(Number(hourStart / 1000n)).toLocaleTimeString([], {
-        hour: 'numeric',
-      }),
+      label: offset === 0 ? 'Now' : formatGameRangeLabel(offset, stepHours),
     });
   }
 
@@ -112,7 +151,7 @@ export function formatChartAxisLabel(cents: number, tickSpacingCents: number): s
 export function chartSummary(points: readonly PortfolioChartPoint[]): string {
   const first = points[0]?.portfolioValueCents ?? STARTING_CAPITAL_CENTS;
   const last = points[points.length - 1]?.portfolioValueCents ?? STARTING_CAPITAL_CENTS;
-  return `${formatReturn(last, first)} vs 24h ago (${formatMoney(first)} -> ${formatMoney(last)})`;
+  return `${formatReturn(last, first)} over selected game-time range (${formatMoney(first)} -> ${formatMoney(last)})`;
 }
 
 export function chartValues(points: readonly PortfolioChartPoint[]): number[] {

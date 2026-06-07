@@ -62,3 +62,11 @@ export function computeFundSharePriceCents(
   const price = portfolioValueCents / totalShares;
   return price > 0n ? price : 1n;
 }
+
+export function computeConstituentWeightBps(
+  positionValueCents: bigint,
+  fundNavCents: bigint
+): bigint {
+  if (positionValueCents <= 0n || fundNavCents <= 0n) return 0n;
+  return (positionValueCents * 10_000n) / fundNavCents;
+}

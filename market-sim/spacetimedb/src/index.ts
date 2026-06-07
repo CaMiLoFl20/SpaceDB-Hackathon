@@ -39,8 +39,10 @@ import {
   FUND_STARTING_NAV_CENTS,
   FUND_TOTAL_SHARES,
   SCRIPTED_FUND_DEFINITIONS,
+  computeConstituentWeightBps,
   computeFundSharePriceCents,
   fundAliasFor,
+  type FundDefinition,
 } from './models/funds';
 import {
   MAX_U64,
@@ -76,6 +78,8 @@ const AUTOMATIC_MARKET_MOVEMENT = false;
 const AI_TRADER_BOTS_ENABLED = true;
 const AI_TRADER_LLM_ENABLED = true;
 const AI_AUTO_NEWS_ENABLED = true;
+const STARTER_FUND_POSITION_COUNT = 3;
+const STARTER_FUND_POSITION_BUDGET_CENTS = 12_000_000_000n;
 const MARKET_TICK_INTERVAL_MICROS = 30_000_000n;
 const GAME_CLOCK_TICK_INTERVAL_MICROS = 1_000_000n;
 const MARKET_ACTIVITY_TICK_INTERVAL_MICROS = 5_000_000n;
@@ -89,8 +93,8 @@ const AI_HARBOR_INITIAL_DELAY_MICROS = 38_000_000n;
 const AI_APEX_INITIAL_DELAY_MICROS = 58_000_000n;
 const AI_NEWS_INITIAL_DELAY_MICROS = 35_000_000n;
 const MICROS_PER_DAY = 86_400_000_000n;
-const HOUR_MICROS = 3_600_000_000n;
-const PORTFOLIO_HISTORY_HOURS = 24n;
+const PORTFOLIO_GAME_HOUR_MICROS = 30_000_000n;
+const PORTFOLIO_HISTORY_GAME_HOURS = 24n * 365n;
 const KEY_ARTICLE_CHANCE_DIVISOR = 7n;
 const KEY_ARTICLE_MIN_SHOCK_BPS = 1_200n;
 const KEY_ARTICLE_MAX_SHOCK_BPS = 3_000n;
@@ -343,6 +347,19 @@ const fundMarketRow = t.object('FundMarketRow', {
   previousPriceCents: t.u64(),
   dayOpenPriceCents: t.u64(),
   tradingDayIndex: t.u64(),
+  updatedAt: t.timestamp(),
+});
+
+const fundConstituentRow = t.object('FundConstituentRow', {
+  fundSymbol: t.string(),
+  fundName: t.string(),
+  symbol: t.string(),
+  name: t.string(),
+  shares: t.u64(),
+  priceCents: t.u64(),
+  dayOpenPriceCents: t.u64(),
+  valueCents: t.u64(),
+  weightBps: t.u64(),
   updatedAt: t.timestamp(),
 });
 
@@ -700,7 +717,7 @@ function findFundHolding(ctx: ModuleCtx, owner: ModuleCtx['sender'], symbol: str
 }
 
 function hourStartMicros(micros: bigint): bigint {
-  return (micros / HOUR_MICROS) * HOUR_MICROS;
+  return (micros / PORTFOLIO_GAME_HOUR_MICROS) * PORTFOLIO_GAME_HOUR_MICROS;
 }
 
 function computePortfolioValueCents(
@@ -729,7 +746,8 @@ function computePortfolioValueCents(
 
 function pruneOldPortfolioSnapshots(ctx: ModuleCtx, owner: ModuleCtx['sender']): void {
   const cutoff =
-    ctx.timestamp.microsSinceUnixEpoch - (PORTFOLIO_HISTORY_HOURS + 1n) * HOUR_MICROS;
+    ctx.timestamp.microsSinceUnixEpoch -
+    (PORTFOLIO_HISTORY_GAME_HOURS + 1n) * PORTFOLIO_GAME_HOUR_MICROS;
   for (const row of ctx.db.portfolioSnapshot.owner.filter(owner)) {
     if (row.hourStartMicros < cutoff) {
       ctx.db.portfolioSnapshot.id.delete(row.id);
@@ -789,6 +807,10 @@ function findFundDefinitionByManager(owner: PlayerIdentity) {
   return allFundDefinitions().find(definition =>
     botIdentity(definition.managerIdentityHex).isEqual(owner)
   );
+}
+
+function isFundManagerIdentity(owner: PlayerIdentity): boolean {
+  return findFundDefinitionByManager(owner) != null;
 }
 
 function isAiTraderIdentity(owner: PlayerIdentity): boolean {
@@ -2708,6 +2730,60 @@ function refreshAllFundPrices(ctx: TimeCtx): void {
   }
 }
 
+function symbolHash(symbol: string): bigint {
+  let value = 0n;
+  for (let i = 0; i < symbol.length; i += 1) {
+    value = value * 41n + BigInt(symbol.charCodeAt(i));
+  }
+  return value;
+}
+
+function ensureStarterFundPortfolio(ctx: TimeCtx, definition: FundDefinition): void {
+  const owner = botIdentity(definition.managerIdentityHex);
+  if ([...ctx.db.holding.owner.filter(owner)].length > 0) return;
+
+  const account = ctx.db.account.owner.find(owner);
+  if (!account || account.balanceCents === 0n) return;
+
+  const stocks = [...ctx.db.stock.iter()].sort((left, right) =>
+    left.symbol.localeCompare(right.symbol)
+  );
+  if (stocks.length === 0) return;
+
+  const offset = Number(symbolHash(definition.symbol) % BigInt(stocks.length));
+  let cashSpent = 0n;
+
+  for (let i = 0; i < STARTER_FUND_POSITION_COUNT && i < stocks.length; i += 1) {
+    const stockRow = stocks[(offset + i) % stocks.length]!;
+    const remainingCash =
+      account.balanceCents > cashSpent ? account.balanceCents - cashSpent : 0n;
+    const positionBudget =
+      remainingCash < STARTER_FUND_POSITION_BUDGET_CENTS
+        ? remainingCash
+        : STARTER_FUND_POSITION_BUDGET_CENTS;
+    const shares = stockRow.priceCents > 0n ? positionBudget / stockRow.priceCents : 0n;
+    if (shares === 0n) continue;
+
+    const totalCents = shares * stockRow.priceCents;
+    cashSpent += totalCents;
+    ctx.db.holding.insert({
+      id: 0n,
+      owner,
+      symbol: stockRow.symbol,
+      shares,
+      updatedAt: ctx.timestamp,
+    });
+  }
+
+  if (cashSpent > 0n) {
+    ctx.db.account.owner.update({
+      ...account,
+      balanceCents: account.balanceCents - cashSpent,
+      updatedAt: ctx.timestamp,
+    });
+  }
+}
+
 function resetOpenPricesForNewGameDay(ctx: TimeCtx, dayIndex: bigint): void {
   for (const row of ctx.db.stock.iter()) {
     ctx.db.stock.symbol.update({
@@ -2847,6 +2923,7 @@ function computeDaySummary(ctx: ModuleCtx, dayIndex: bigint): void {
   const worst = fundReturns[fundReturns.length - 1]!;
 
   const players = [...ctx.db.playerDirectory.iter()]
+    .filter(p => !isFundManagerIdentity(p.owner))
     .map(p => ({
       name: p.name,
       value: computePortfolioValueCents(ctx, p.owner),
@@ -2940,6 +3017,8 @@ function ensureFundsSeeded(ctx: TimeCtx): void {
     } else {
       refreshFundPrice(ctx, existing.symbol);
     }
+    ensureStarterFundPortfolio(ctx, definition);
+    refreshFundPrice(ctx, definition.symbol);
   }
 }
 
@@ -3243,6 +3322,47 @@ export const market_funds = spacetimedb.anonymousView(
       }))
 );
 
+export const fund_constituents = spacetimedb.anonymousView(
+  { name: 'fund_constituents', public: true },
+  t.array(fundConstituentRow),
+  ctx => {
+    const funds = [...ctx.db.fund.iter()];
+    const rows = [...ctx.db.holding.iter()]
+      .map(position => {
+        const fundRow = funds.find(row =>
+          botIdentity(row.managerIdentityHex).isEqual(position.owner)
+        );
+        const stockRow = ctx.db.stock.symbol.find(position.symbol);
+        if (!fundRow || !stockRow || position.shares <= 0n) return undefined;
+        const valueCents = position.shares * stockRow.priceCents;
+
+        return {
+          fundSymbol: fundRow.symbol,
+          fundName: fundRow.name,
+          symbol: stockRow.symbol,
+          name: stockRow.name,
+          shares: position.shares,
+          priceCents: stockRow.priceCents,
+          dayOpenPriceCents: stockRow.dayOpenPriceCents,
+          valueCents,
+          weightBps: computeConstituentWeightBps(valueCents, fundRow.navCents),
+          updatedAt: stockRow.updatedAt,
+        };
+      })
+      .filter(row => row != null);
+
+    rows.sort((left, right) => {
+      const fundOrder = left.fundName.localeCompare(right.fundName);
+      if (fundOrder !== 0) return fundOrder;
+      if (right.valueCents > left.valueCents) return 1;
+      if (right.valueCents < left.valueCents) return -1;
+      return left.symbol.localeCompare(right.symbol);
+    });
+
+    return rows;
+  }
+);
+
 export const my_holdings = spacetimedb.view(
   { name: 'my_holdings', public: true },
   t.array(holding.rowType),
@@ -3319,7 +3439,9 @@ export const prediction_leaderboard = spacetimedb.anonymousView(
   { name: 'prediction_leaderboard', public: true },
   t.array(predictionLeaderboardRow),
   ctx => {
-    const settled = [...ctx.db.dailyPrediction.iter()].filter(p => p.settledAt != null);
+    const settled = [...ctx.db.dailyPrediction.iter()].filter(
+      p => p.settledAt != null && !isFundManagerIdentity(p.owner)
+    );
     const byOwner = new Map<string, { total: bigint; correct: bigint; bonus: bigint }>();
     for (const p of settled) {
       const key = p.owner.toHexString();
@@ -3471,7 +3593,9 @@ export const leaderboard = spacetimedb.view(
   { name: 'leaderboard', public: true },
   t.array(leaderboardRow),
   ctx => {
-    const rows = [...ctx.db.playerDirectory.iter()].map(player => {
+    const rows = [...ctx.db.playerDirectory.iter()].filter(
+      player => !isFundManagerIdentity(player.owner)
+    ).map(player => {
       const playerAccount = ctx.db.account.owner.find(player.owner);
       const balanceCents = playerAccount?.balanceCents ?? 0n;
       let holdingsValue = 0n;

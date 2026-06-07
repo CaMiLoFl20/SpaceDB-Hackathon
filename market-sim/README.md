@@ -4,6 +4,12 @@ A multiplayer fund-trading game built on [SpacetimeDB](https://spacetimedb.com).
 
 ## How to Play
 
+### Objective
+
+You are a retail trader competing in a compressed market simulation. Your job is to grow your portfolio by buying and selling shares of public funds, reading market signals, and predicting which funds will outperform each trading day.
+
+You do **not** trade individual stocks directly. Stocks are the underlying assets traded by fund managers. Their gains and losses flow through to fund NAVs and fund share prices.
+
 ### Getting Started
 
 1. Open the app and pick a **nickname** — you start with **$10,000** in cash.
@@ -13,9 +19,21 @@ A multiplayer fund-trading game built on [SpacetimeDB](https://spacetimedb.com).
 ### Trading
 
 - Select a fund from the market table, enter a share count, and click **Buy** or **Sell**.
+- Use the **Fund holdings** panel to inspect the stocks inside the selected fund before buying. Players can research stock exposure, but cannot trade stocks directly.
 - Fund share prices are backed by each manager's underlying portfolio NAV (net asset value). When a manager trades well, their fund price goes up.
 - Each fund has a limited public float (250,000 shares). Shares you buy come from the float; shares you sell go back into it.
 - Your portfolio value = cash + (fund shares x current fund prices).
+
+### Fund Holdings
+
+Each fund is a wrapper around a live stock portfolio. The **Fund holdings** panel shows the selected fund's current stock constituents:
+
+- **Stock** — the underlying company symbol and name.
+- **Price / Day** — the current stock price and its daily move.
+- **Shares** — how many shares the fund manager currently holds.
+- **Weight** — how much of the fund's NAV is exposed to that stock.
+
+Use this panel to connect public market news to funds. For example, if a key article sharply hurts `NVDA`, funds with heavier `NVDA` exposure should be more vulnerable than funds that do not hold it.
 
 ### Daily Predictions
 
@@ -28,10 +46,18 @@ A multiplayer fund-trading game built on [SpacetimeDB](https://spacetimedb.com).
 
 ### Reading the Signals
 
+- **Market pulse strip** — track top stock movers, active key articles, and time remaining without leaving the trading desk.
 - **Manager activity tape** — see real-time trades by fund managers (buy/sell, stock, shares, price).
 - **Market news** — AI-generated headlines react to trading activity and market moves.
 - **Fund price movements** — watch which funds are gaining or losing value throughout the day.
-- **Key articles** — occasional market shock events can move individual stock prices significantly.
+- **Fund holdings** — inspect the stock exposure behind each fund before placing an order.
+- **Key articles** — occasional market shock events can move individual stock prices significantly, which can quickly lift or damage funds holding those stocks.
+
+### Feedback and Sound
+
+- Trade confirmations and rejected trades appear as short toast notifications.
+- Key articles and rank gains also trigger toasts so important events do not get buried in the feed.
+- Sound is muted by default. Use the **Sound** toggle in the market pulse strip to enable short cues for market open, closing warning, trades, key articles, and rank movement.
 
 ### Game Day Cycle
 
@@ -48,11 +74,12 @@ The next day opens automatically after results.
 
 ### Winning
 
-Compete on the **leaderboard** — ranked by total portfolio value (cash + fund holdings). Beat the other players and the fund managers themselves.
+Compete on the **leaderboard** — ranked by total portfolio value (cash + fund holdings). Leaderboards show human players only; fund managers still appear in the trade tape, fund activity, and market signals.
 
 ## Current Functionality
 
 - **Fund-share trading** — buy and sell public fund shares with real-time price updates.
+- **Pre-trade fund research** — selected funds disclose their current underlying stock constituents, position values, and weights.
 - **Five anonymous funds** — three LLM-managed and two scripted, all presented with randomized mutual-fund-style names.
 - **Distinct fund strategies** — LLM funds use conservative/moderate/aggressive styles via daily trading plans. Scripted funds use sector rotation and momentum-chasing strategies.
 - **Information hiding** — fund types, risk profiles, and manager reasoning are hidden from players. Only public signals (prices, trades, news) are visible.
@@ -60,7 +87,9 @@ Compete on the **leaderboard** — ranked by total portfolio value (cash + fund 
 - **Day close results** — each day ends with a summary phase showing best/worst fund performance and top player.
 - **NAV-backed fund pricing** — fund share prices derive from each manager's underlying stock portfolio.
 - **AI market news** — LLM-generated headlines react to trading activity without revealing player or manager identities.
-- **24h portfolio history chart** — track your portfolio performance over time.
+- **Market pulse strip** — top movers, key article status, clock, and sound toggle in one compact status row.
+- **Game feedback** — toast notifications and optional Web Audio cues for trades, rejected actions, key articles, market open/close warning, and rank gains.
+- **Portfolio history chart** — track performance over compressed game-time ranges: 24h, week, month, and year.
 - **Anti-leakage LLM prompts** — bot prompts use public aliases, include anti-collusion rules, and do not expose strategy types.
 - **Unit tests** — deterministic finance, chart, fund-pricing, game-day, and prediction helpers covered with Vitest.
 
@@ -158,6 +187,7 @@ market-sim/
 | View/Table | Description |
 |------------|-------------|
 | `market_funds` | Public fund market: name, symbol, NAV, price, float (type/risk hidden) |
+| `fund_constituents` | Public read-only stock constituents for each fund |
 | `market_clock` | Current game day, phase, time, countdown |
 | `latest_day_summary` | Most recent day close summary (best/worst fund, top player) |
 | `my_fund_holdings` / `my_fund_trades` | Private player fund positions and trade history |
@@ -165,7 +195,7 @@ market-sim/
 | `my_daily_prediction` | Current day prediction (if submitted) |
 | `prediction_results` | Last 10 settled predictions for the player |
 | `prediction_leaderboard` | Public prediction accuracy rankings |
-| `leaderboard` | Public ranking by estimated portfolio value |
+| `leaderboard` | Public human-player ranking by estimated portfolio value |
 | `ai_trader_log` | Public manager trade tape |
 | `ai_trader_minds` | Public manager status (reasoning/source hidden) |
 | `market_stocks` | Public underlying stock prices |
@@ -231,6 +261,19 @@ spacetime call --server maincloud market-sim-69q12 seed_market
 - **Share issuance controls** — funds have a fixed float but no admin/reset flow for replenishing it.
 - **End-to-end tests** — deterministic unit tests exist; browser/SpacetimeDB integration tests are still missing.
 - **Operational admin tools** — no admin UI yet for resetting seasons, rotating fund aliases, or controlling AI schedules.
+- **Additional gamification polish** — achievements, streaks, and richer end-of-day presentation are still open.
+
+## Proposed Gamification Enhancements
+
+These are remaining design candidates, not yet implemented.
+
+### UI Enhancements
+
+- **Fund exposure badges** — show the selected fund's largest holdings as small badges beside the trade ticket, such as `NVDA 28%` or `AAPL 12%`.
+- **End-of-day results card** — richer close screen with best/worst fund, your prediction result, portfolio delta, rank movement, and biggest missed opportunity.
+- **Rank movement indicator** — small up/down rank delta near the leaderboard and player summary after each results phase.
+- **Prediction streak meter** — track consecutive correct prediction components to make the prediction game feel cumulative.
+- **Portfolio milestone badges** — lightweight achievements for first trade, first profitable day, correct combo prediction, new all-time high, and top-three rank.
 
 ## Further Reading
 

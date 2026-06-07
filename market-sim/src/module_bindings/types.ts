@@ -168,6 +168,23 @@ export const Fund = __t.object("Fund", {
 });
 export type Fund = __Infer<typeof Fund>;
 
+export const FundConstituentRow = __t.object("FundConstituentRow", {
+  fundSymbol: __t.string(),
+  fundName: __t.string(),
+  symbol: __t.string(),
+  name: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  dayOpenPriceCents: __t.u64(),
+  valueCents: __t.u64(),
+  weightBps: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type FundConstituentRow = __Infer<typeof FundConstituentRow>;
+
+export const FundConstituents = __t.object("FundConstituents", {});
+export type FundConstituents = __Infer<typeof FundConstituents>;
+
 export const FundHolding = __t.object("FundHolding", {
   id: __t.u64(),
   owner: __t.identity(),

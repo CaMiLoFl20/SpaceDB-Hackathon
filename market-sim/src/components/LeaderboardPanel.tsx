@@ -31,12 +31,20 @@ export function LeaderboardPanel({
       {topRows.length === 0 ? (
         <p className="muted">No ranked players yet.</p>
       ) : (
-        <ol className="leaderboard-list">
+        <ol className="leaderboard-list leaderboard-list--ranked">
           {topRows.map((entry, index) => (
             <li key={entry.owner.toHexString()}>
-              <strong>#{index + 1} {entry.name}</strong>
-              {identity?.isEqual(entry.owner) ? ' (you)' : ''} · {formatMoney(entry.estimatedPortfolioValueCents)}
-              <div className="muted">Cash {formatMoney(entry.balanceCents)}</div>
+              <span className="rank-pill">#{index + 1}</span>
+              <div className="leaderboard-entry">
+                <div>
+                  <strong>{entry.name}</strong>
+                  {identity?.isEqual(entry.owner) && <span className="you-badge">You</span>}
+                </div>
+                <div className="muted">Cash {formatMoney(entry.balanceCents)}</div>
+              </div>
+              <strong className="leaderboard-value">
+                {formatMoney(entry.estimatedPortfolioValueCents)}
+              </strong>
             </li>
           ))}
         </ol>

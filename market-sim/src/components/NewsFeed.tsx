@@ -1,7 +1,10 @@
 import { optionalString } from '../utils/finance';
+import type { KeyArticleItem } from './MarketPulseStrip';
 
 export function NewsFeed({
   news,
+  keyArticle,
+  affectedFunds,
   configured,
   failedMessage,
   onGenerate,
@@ -15,6 +18,8 @@ export function NewsFeed({
     createdAt: { toDate: () => Date };
     isAiGenerated: boolean;
   }[];
+  keyArticle?: KeyArticleItem;
+  affectedFunds?: readonly string[];
   configured: boolean;
   failedMessage: string;
   onGenerate: () => void;
@@ -33,6 +38,15 @@ export function NewsFeed({
       <p className="muted">News reacts to trades and price moves. Player names and manager identities stay hidden.</p>
       {!configured && <p className="error-text">Auto news is off. Add an OpenAI or OpenRouter key in AI Settings.</p>}
       {failedMessage && <p className="error-text">{failedMessage}</p>}
+      {keyArticle && (
+        <section className={`key-article-card key-article-card--${keyArticle.sentiment}`}>
+          <span className="pulse-label">Key article</span>
+          <strong>{keyArticle.headline}</strong>
+          {affectedFunds && affectedFunds.length > 0 && (
+            <p>Affected funds: {affectedFunds.join(', ')}</p>
+          )}
+        </section>
+      )}
       {news.length === 0 ? (
         <p className="muted">No market signals yet.</p>
       ) : (

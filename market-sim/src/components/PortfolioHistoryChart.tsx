@@ -4,10 +4,20 @@ import {
   chartValues,
   formatChartAxisLabel,
   type PortfolioChartPoint,
+  PORTFOLIO_CHART_RANGES,
+  type PortfolioChartRange,
 } from '../utils/chart';
 import { STARTING_CAPITAL_CENTS } from '../utils/finance';
 
-export function PortfolioHistoryChart({ points }: { points: PortfolioChartPoint[] }) {
+export function PortfolioHistoryChart({
+  points,
+  range,
+  onRangeChange,
+}: {
+  points: PortfolioChartPoint[];
+  range: PortfolioChartRange;
+  onRangeChange: (range: PortfolioChartRange) => void;
+}) {
   const width = 640;
   const height = 200;
   const padRight = 12;
@@ -41,10 +51,27 @@ export function PortfolioHistoryChart({ points }: { points: PortfolioChartPoint[
   return (
     <div className="portfolio-chart">
       <div className="portfolio-chart__header">
-        <p className="portfolio-chart__title">24-hour portfolio value</p>
-        <p className="portfolio-chart__subtitle">{chartSummary(points)}</p>
+        <div>
+          <p className="portfolio-chart__title">Portfolio value</p>
+        </div>
+        <div className="segmented-control" aria-label="Portfolio chart range">
+          {(Object.keys(PORTFOLIO_CHART_RANGES) as PortfolioChartRange[]).map(option => (
+            <button
+              className={option === range ? 'is-active' : ''}
+              key={option}
+              onClick={() => onRangeChange(option)}
+              type="button"
+            >
+              {PORTFOLIO_CHART_RANGES[option].label}
+            </button>
+          ))}
+        </div>
       </div>
-      <svg aria-label="Portfolio value over the last 24 hours" className="portfolio-chart__svg" role="img" viewBox={`0 0 ${width} ${height}`}>
+      <div className="portfolio-chart__caption">
+        <p className="portfolio-chart__subtitle">{chartSummary(points)}</p>
+        <p className="portfolio-chart__subtitle">Time ranges use compressed game time: 30 real seconds = 1 game hour.</p>
+      </div>
+      <svg aria-label="Portfolio value over selected game-time range" className="portfolio-chart__svg" role="img" viewBox={`0 0 ${width} ${height}`}>
         {yLabels.map(label => (
           <g key={label.value}>
             <line className="portfolio-chart__grid" x1={padLeft} x2={width - padRight} y1={scaleY(label.value)} y2={scaleY(label.value)} />

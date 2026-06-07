@@ -27,6 +27,11 @@ export function formatPriceChangePercent(current: bigint, previous: bigint): str
   return `${sign}${pct.toFixed(2)}%`;
 }
 
+export function formatBpsPercent(bps: bigint): string {
+  const pct = Number(bps) / 100;
+  return `${pct.toFixed(2)}%`;
+}
+
 export function parseShares(input: string): bigint | undefined {
   const value = input.trim();
   if (!/^\d+$/.test(value)) return undefined;

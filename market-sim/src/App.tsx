@@ -6,10 +6,19 @@ import {
   defaultModel,
   type AiConnectionState,
 } from './components/AiSettingsModal';
+import {
+  FundConstituentsPanel,
+  type FundConstituentItem,
+} from './components/FundConstituentsPanel';
 import { FundMarketTable, type FundMarketItem } from './components/FundMarketTable';
 import { LeaderboardPanel, sortLeaderboard } from './components/LeaderboardPanel';
 import { ManagerActivity } from './components/ManagerActivity';
 import { MarketClockBanner } from './components/MarketClockBanner';
+import {
+  MarketPulseStrip,
+  type KeyArticleItem,
+  type StockMarketItem,
+} from './components/MarketPulseStrip';
 import { MetricTile } from './components/MetricTile';
 import { NameForm } from './components/NameForm';
 import { NewsFeed } from './components/NewsFeed';
@@ -17,8 +26,10 @@ import { PortfolioHistoryChart } from './components/PortfolioHistoryChart';
 import { PortfolioSummary } from './components/PortfolioSummary';
 import { PredictionCard } from './components/PredictionCard';
 import { PredictionResultPopup } from './components/PredictionResultPopup';
+import { ToastStack, type ToastItem } from './components/ToastStack';
 import { TradeTicket } from './components/TradeTicket';
-import { buildPortfolioChartSeries } from './utils/chart';
+import { buildPortfolioChartSeries, type PortfolioChartRange } from './utils/chart';
+import { playGameCue, type GameCue } from './utils/audio';
 import {
   GAIN_COLOR,
   LOSS_COLOR,
@@ -32,10 +43,12 @@ import {
   parseShares,
   sortByTimeDesc,
 } from './utils/finance';
+import { affectedFundNames } from './utils/gamification';
 import { procedures, reducers, tables } from './module_bindings';
 
 type ThemeMode = 'light' | 'dark';
 const THEME_STORAGE_KEY = 'fund-floor-theme';
+const SOUND_STORAGE_KEY = 'fund-floor-sound';
 
 function readStoredTheme(): ThemeMode {
   return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
@@ -48,6 +61,10 @@ function applyTheme(theme: ThemeMode): void {
     delete document.documentElement.dataset.theme;
   }
   localStorage.setItem(THEME_STORAGE_KEY, theme);
+}
+
+function readStoredSoundEnabled(): boolean {
+  return localStorage.getItem(SOUND_STORAGE_KEY) === 'on';
 }
 
 function ThemeToggle({
@@ -69,6 +86,9 @@ function App() {
   const [accounts] = useTable(tables.my_account);
   const [players] = useTable(tables.my_player);
   const [funds, fundsReady] = useTable(tables.market_funds);
+  const [fundConstituents] = useTable(tables.fund_constituents);
+  const [stocks] = useTable(tables.market_stocks);
+  const [keyArticles] = useTable(tables.keyArticle);
   const [fundHoldings] = useTable(tables.my_fund_holdings);
   const [fundTrades] = useTable(tables.my_fund_trades);
   const [leaderboardRows] = useTable(tables.leaderboard);
@@ -126,7 +146,13 @@ function App() {
   const [githubError, setGithubError] = useState('');
   const [predictionPopupDismissed, setPredictionPopupDismissed] = useState(false);
   const prevPhaseRef = useRef('');
+  const previousRankRef = useRef<number | null>(null);
+  const previousKeyArticleIdRef = useRef<bigint | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => readStoredTheme());
+  const [soundEnabled, setSoundEnabled] = useState(() => readStoredSoundEnabled());
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [portfolioChartRange, setPortfolioChartRange] =
+    useState<PortfolioChartRange>('day');
 
   useEffect(() => {
     applyTheme(theme);
@@ -134,6 +160,30 @@ function App() {
 
   const toggleTheme = () => {
     setTheme(current => (current === 'dark' ? 'light' : 'dark'));
+  };
+
+  const addToast = useCallback((toast: Omit<ToastItem, 'id'>) => {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts(current => [...current.slice(-2), { ...toast, id }]);
+    window.setTimeout(() => {
+      setToasts(current => current.filter(item => item.id !== id));
+    }, 3200);
+  }, []);
+
+  const playCue = useCallback(
+    (cue: GameCue) => {
+      if (soundEnabled) playGameCue(cue);
+    },
+    [soundEnabled]
+  );
+
+  const toggleSound = () => {
+    setSoundEnabled(current => {
+      const next = !current;
+      localStorage.setItem(SOUND_STORAGE_KEY, next ? 'on' : 'off');
+      if (next) playGameCue('trade-success', 0.12);
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -187,6 +237,30 @@ function App() {
     () => [...funds].sort((left, right) => left.name.localeCompare(right.name)) as FundMarketItem[],
     [funds, lastRefreshedAt]
   );
+  const sortedFundConstituents = useMemo(
+    () =>
+      [...fundConstituents].sort((left, right) => {
+        const fundOrder = left.fundName.localeCompare(right.fundName);
+        if (fundOrder !== 0) return fundOrder;
+        if (right.valueCents > left.valueCents) return 1;
+        if (right.valueCents < left.valueCents) return -1;
+        return left.symbol.localeCompare(right.symbol);
+      }) as FundConstituentItem[],
+    [fundConstituents, lastRefreshedAt]
+  );
+  const sortedStocks = useMemo(
+    () =>
+      [...stocks].sort((left, right) => left.symbol.localeCompare(right.symbol)) as StockMarketItem[],
+    [stocks, lastRefreshedAt]
+  );
+  const latestKeyArticle = useMemo(() => {
+    const latest = sortByTimeDesc(keyArticles)[0];
+    return latest as KeyArticleItem | undefined;
+  }, [keyArticles, lastRefreshedAt]);
+  const latestAffectedFunds = useMemo(
+    () => affectedFundNames(latestKeyArticle?.symbol, sortedFundConstituents, 3),
+    [latestKeyArticle?.symbol, sortedFundConstituents]
+  );
 
   // Reset prediction popup when entering results phase
   const currentPhase = marketClockRows[0]?.phase ?? '';
@@ -194,8 +268,14 @@ function App() {
     if (currentPhase === 'results' && prevPhaseRef.current !== 'results') {
       setPredictionPopupDismissed(false);
     }
+    if (currentPhase === 'open' && prevPhaseRef.current && prevPhaseRef.current !== 'open') {
+      playCue('market-open');
+    }
+    if (currentPhase === 'closing_warning' && prevPhaseRef.current !== 'closing_warning') {
+      playCue('closing-warning');
+    }
     prevPhaseRef.current = currentPhase;
-  }, [currentPhase]);
+  }, [currentPhase, playCue]);
 
   const activeSymbol =
     selectedSymbol || (sortedFunds.length > 0 ? sortedFunds[0].symbol : '');
@@ -218,9 +298,43 @@ function App() {
     const index = sortedLeaderboard.findIndex(entry => identity.isEqual(entry.owner));
     return index >= 0 ? index + 1 : null;
   }, [identity, sortedLeaderboard]);
+  useEffect(() => {
+    if (currentRank == null) return;
+    if (previousRankRef.current != null && currentRank < previousRankRef.current) {
+      playCue('rank-up');
+      addToast({
+        title: 'Rank up',
+        detail: `You moved to #${currentRank}.`,
+        tone: 'success',
+      });
+    }
+    previousRankRef.current = currentRank;
+  }, [addToast, currentRank, playCue]);
+  useEffect(() => {
+    if (!latestKeyArticle) return;
+    if (previousKeyArticleIdRef.current == null) {
+      previousKeyArticleIdRef.current = latestKeyArticle.id;
+      return;
+    }
+    if (latestKeyArticle.id !== previousKeyArticleIdRef.current) {
+      previousKeyArticleIdRef.current = latestKeyArticle.id;
+      playCue('key-article');
+      addToast({
+        title: 'Key article',
+        detail: `${latestKeyArticle.symbol} ${latestKeyArticle.sentiment}. Watch affected funds.`,
+        tone: 'alert',
+      });
+    }
+  }, [addToast, latestKeyArticle, playCue]);
   const portfolioChartPoints = useMemo(
-    () => buildPortfolioChartSeries(portfolioHistory, portfolioValue, lastRefreshedAt),
-    [portfolioHistory, portfolioValue, lastRefreshedAt]
+    () =>
+      buildPortfolioChartSeries(
+        portfolioHistory,
+        portfolioValue,
+        lastRefreshedAt,
+        portfolioChartRange
+      ),
+    [portfolioHistory, portfolioValue, lastRefreshedAt, portfolioChartRange]
   );
   const recentNews = useMemo(
     () => sortByTimeDesc(newsItems).slice(0, 6),
@@ -348,15 +462,18 @@ function App() {
   const runTrade = async (side: 'buy' | 'sell') => {
     if (marketClock && !marketClock.tradesAllowed) {
       setTradeError('Trading is frozen until the next day starts.');
+      playCue('trade-error');
       return;
     }
     const shareCount = parseShares(shares);
     if (!activeFund) {
       setTradeError('Choose a fund.');
+      playCue('trade-error');
       return;
     }
     if (!shareCount) {
       setTradeError('Enter a whole number of shares greater than zero.');
+      playCue('trade-error');
       return;
     }
 
@@ -365,8 +482,21 @@ function App() {
     try {
       if (side === 'buy') await buyFund({ symbol: activeFund.symbol, shares: shareCount });
       else await sellFund({ symbol: activeFund.symbol, shares: shareCount });
+      playCue('trade-success');
+      addToast({
+        title: side === 'buy' ? 'Buy executed' : 'Sell executed',
+        detail: `${shareCount.toString()} ${activeFund.name} shares @ ${formatMoney(activeFund.priceCents)}`,
+        tone: 'success',
+      });
     } catch (caught) {
-      setTradeError(errorMessage(caught));
+      const message = errorMessage(caught);
+      setTradeError(message);
+      playCue('trade-error');
+      addToast({
+        title: 'Trade rejected',
+        detail: message,
+        tone: 'error',
+      });
     } finally {
       setSubmitting(false);
     }
@@ -454,6 +584,7 @@ function App() {
 
   return (
     <main className="app-page">
+      <ToastStack toasts={toasts} />
       <header className="top-bar">
         <div>
           <p className="muted">Fund Floor</p>
@@ -479,6 +610,15 @@ function App() {
           <strong>{me.name}</strong>
         </div>
       </header>
+
+      <MarketPulseStrip
+        affectedFunds={latestAffectedFunds}
+        clock={marketClock}
+        keyArticle={latestKeyArticle}
+        onToggleSound={toggleSound}
+        soundEnabled={soundEnabled}
+        stocks={sortedStocks}
+      />
 
       {marketClock?.phase === 'results' &&
         !predictionPopupDismissed &&
@@ -535,7 +675,11 @@ function App() {
           <MetricTile label="Cash balance" value={formatMoney(cashBalance)} />
           <MetricTile label="Fund holdings" value={formatMoney(fundHoldingsValue)} />
         </div>
-        <PortfolioHistoryChart points={portfolioChartPoints} />
+        <PortfolioHistoryChart
+          onRangeChange={setPortfolioChartRange}
+          points={portfolioChartPoints}
+          range={portfolioChartRange}
+        />
       </section>
 
       <section className="main-grid">
@@ -552,6 +696,10 @@ function App() {
           shares={shares}
           submitting={submitting}
           tradesAllowed={marketClock?.tradesAllowed ?? true}
+        />
+        <FundConstituentsPanel
+          activeFund={activeFund}
+          constituents={sortedFundConstituents}
         />
       </section>
 
@@ -599,8 +747,10 @@ function App() {
       <section className="main-grid">
         <LeaderboardPanel identity={identity} rows={leaderboardRows} />
         <NewsFeed
+          affectedFunds={latestAffectedFunds}
           configured={globalAiConfigured}
           failedMessage={newsError}
+          keyArticle={latestKeyArticle}
           news={recentNews}
           onGenerate={() => void postDemoNews()}
           submitting={submitting}
