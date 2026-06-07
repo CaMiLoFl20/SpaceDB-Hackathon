@@ -1,3 +1,57 @@
+:root {
+  color-scheme: light;
+  --bg-page: #f5f7fb;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-label: #374151;
+  --border: #d8dee9;
+  --border-subtle: #e5e7eb;
+  --surface: #fff;
+  --surface-muted: #f9fafb;
+  --surface-hover: #eef5ff;
+  --input-border: #d1d5db;
+  --error: #b91c1c;
+  --modal-backdrop: rgb(15 23 42 / 55%);
+  --connection-bg: #f8fafc;
+  --connection-border: #e2e8f0;
+  --clock-bg: #eff6ff;
+  --clock-border: #bfdbfe;
+  --clock-warning-bg: #fefce8;
+  --clock-warning-border: #facc15;
+  --clock-frozen-bg: #fef2f2;
+  --clock-frozen-border: #fca5a5;
+  --hero-bg: #111827;
+  --hero-text: #f9fafb;
+  --hero-muted: #a7b0c0;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-page: #0f172a;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-label: #cbd5e1;
+  --border: #334155;
+  --border-subtle: #293548;
+  --surface: #1e293b;
+  --surface-muted: #162032;
+  --surface-hover: #243044;
+  --input-border: #475569;
+  --error: #fca5a5;
+  --modal-backdrop: rgb(0 0 0 / 65%);
+  --connection-bg: #162032;
+  --connection-border: #334155;
+  --clock-bg: #1e3a5f;
+  --clock-border: #2563eb;
+  --clock-warning-bg: #422006;
+  --clock-warning-border: #ca8a04;
+  --clock-frozen-bg: #450a0a;
+  --clock-frozen-border: #dc2626;
+  --hero-bg: #020617;
+  --hero-text: #f8fafc;
+  --hero-muted: #94a3b8;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -10,8 +64,8 @@ body,
 
 body {
   margin: 0;
-  color: #111827;
-  background: #f5f7fb;
+  color: var(--text-primary);
+  background: var(--bg-page);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -40,11 +94,11 @@ input,
 select,
 textarea {
   width: 100%;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--input-border);
   border-radius: 7px;
   padding: 0.7rem;
-  color: #111827;
-  background: #fff;
+  color: var(--text-primary);
+  background: var(--surface);
 }
 
 textarea {
@@ -56,7 +110,13 @@ label {
   gap: 0.4rem;
   font-size: 0.9rem;
   font-weight: 650;
-  color: #374151;
+  color: var(--text-label);
+}
+
+button.secondary-button {
+  color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
 }
 
 h1,
@@ -122,13 +182,13 @@ p {
 
 .muted {
   margin: 0;
-  color: #6b7280;
+  color: var(--text-secondary);
   font-size: 0.86rem;
 }
 
 .error-text {
   margin: 0;
-  color: #b91c1c;
+  color: var(--error);
   font-size: 0.9rem;
 }
 
@@ -149,10 +209,10 @@ p {
   display: grid;
   gap: 1rem;
   width: min(100%, 480px);
-  border: 1px solid #d8dee9;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 2rem;
-  background: #fff;
+  background: var(--surface);
   text-align: left;
 }
 
@@ -205,8 +265,8 @@ p {
   gap: 1.25rem;
   border-radius: 8px;
   padding: 1.5rem;
-  color: #f9fafb;
-  background: #111827;
+  color: var(--hero-text);
+  background: var(--hero-bg);
 }
 
 .clock-banner {
@@ -214,20 +274,20 @@ p {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 1rem;
   align-items: center;
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--clock-border);
   border-radius: 8px;
   padding: 1rem;
-  background: #eff6ff;
+  background: var(--clock-bg);
 }
 
 .clock-banner--warning {
-  border-color: #facc15;
-  background: #fefce8;
+  border-color: var(--clock-warning-border);
+  background: var(--clock-warning-bg);
 }
 
 .clock-banner--frozen {
-  border-color: #fca5a5;
-  background: #fef2f2;
+  border-color: var(--clock-frozen-border);
+  background: var(--clock-frozen-bg);
 }
 
 .clock-banner--results {
@@ -254,11 +314,11 @@ p {
 
 .clock-banner p {
   margin: 0;
-  color: #374151;
+  color: var(--text-label);
 }
 
 .hero-panel .muted {
-  color: #a7b0c0;
+  color: var(--hero-muted);
 }
 
 .rank-block {
@@ -295,10 +355,10 @@ p {
 .panel {
   display: grid;
   gap: 1rem;
-  border: 1px solid #d8dee9;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1.25rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .market-panel {
@@ -312,7 +372,7 @@ p {
 
 .data-table th,
 .data-table td {
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-subtle);
   padding: 0.75rem 0.5rem;
   vertical-align: top;
 }
@@ -323,7 +383,7 @@ p {
 
 .data-table tbody tr:hover,
 .selected-row {
-  background: #eef5ff;
+  background: var(--surface-hover);
 }
 
 .trade-context,
@@ -357,7 +417,7 @@ p {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border-subtle);
   padding-top: 0.7rem;
 }
 
@@ -367,10 +427,10 @@ p {
 }
 
 .news-list li {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 0.85rem;
-  background: #f9fafb;
+  background: var(--surface-muted);
 }
 
 .news-list p {
@@ -390,10 +450,10 @@ p {
 .manager-card {
   display: grid;
   gap: 0.35rem;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 0.85rem;
-  background: #f9fafb;
+  background: var(--surface-muted);
 }
 
 .activity-log {
@@ -419,14 +479,14 @@ p {
 
 .portfolio-chart__title {
   margin: 0;
-  color: #f9fafb;
+  color: var(--hero-text);
   font-size: 0.95rem;
   font-weight: 700;
 }
 
 .portfolio-chart__subtitle {
   margin: 0.25rem 0 0;
-  color: #a7b0c0;
+  color: var(--hero-muted);
   font-size: 0.8rem;
 }
 
@@ -443,7 +503,7 @@ p {
 
 .portfolio-chart__ylabel,
 .portfolio-chart__xlabel {
-  fill: #a7b0c0;
+  fill: var(--hero-muted);
   font-size: 10px;
 }
 
@@ -454,7 +514,7 @@ p {
   display: grid;
   place-items: center;
   padding: 1rem;
-  background: rgb(15 23 42 / 55%);
+  background: var(--modal-backdrop);
 }
 
 .config-modal {
@@ -463,7 +523,8 @@ p {
   width: min(100%, 560px);
   border-radius: 8px;
   padding: 1.25rem;
-  background: #fff;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .config-modal header,
@@ -475,10 +536,10 @@ p {
 }
 
 .connection-box {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--connection-border);
   border-radius: 8px;
   padding: 0.75rem;
-  background: #f8fafc;
+  background: var(--connection-bg);
   font-size: 0.9rem;
 }
 

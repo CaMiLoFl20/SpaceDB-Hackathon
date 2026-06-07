@@ -6,6 +6,11 @@ import App from './App.tsx';
 import { DbConnection, type ErrorContext } from './module_bindings/index.ts';
 import './App.css';
 
+const THEME_STORAGE_KEY = 'fund-floor-theme';
+if (localStorage.getItem(THEME_STORAGE_KEY) === 'dark') {
+  document.documentElement.dataset.theme = 'dark';
+}
+
 const HOST = import.meta.env.VITE_SPACETIMEDB_HOST ?? 'ws://localhost:3000';
 const DB_NAME = import.meta.env.VITE_SPACETIMEDB_DB_NAME ?? 'llm-chat-ts';
 const TOKEN_KEY = `${HOST}/${DB_NAME}/auth_token`;

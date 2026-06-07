@@ -33,6 +33,36 @@ import {
 } from './utils/finance';
 import { procedures, reducers, tables } from './module_bindings';
 
+type ThemeMode = 'light' | 'dark';
+const THEME_STORAGE_KEY = 'fund-floor-theme';
+
+function readStoredTheme(): ThemeMode {
+  return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+}
+
+function applyTheme(theme: ThemeMode): void {
+  if (theme === 'dark') {
+    document.documentElement.dataset.theme = 'dark';
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
+  localStorage.setItem(THEME_STORAGE_KEY, theme);
+}
+
+function ThemeToggle({
+  theme,
+  onToggle,
+}: {
+  theme: ThemeMode;
+  onToggle: () => void;
+}) {
+  return (
+    <button className="secondary-button" onClick={onToggle} type="button">
+      {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+    </button>
+  );
+}
+
 function App() {
   const { identity, isActive: connected } = useSpacetimeDB();
   const [accounts] = useTable(tables.my_account);
@@ -93,6 +123,15 @@ function App() {
   const [githubClientId, setGithubClientId] = useState('');
   const [githubLoggingIn, setGithubLoggingIn] = useState(false);
   const [githubError, setGithubError] = useState('');
+  const [theme, setTheme] = useState<ThemeMode>(() => readStoredTheme());
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(current => (current === 'dark' ? 'light' : 'dark'));
+  };
 
   useEffect(() => {
     if (!connected || !fundsReady || funds.length > 0 || seedAttempted.current) return;
@@ -348,8 +387,11 @@ function App() {
   if (!connected || !identity || !account) {
     return (
       <main className="empty-state full-height">
-        <h1>Fund Floor</h1>
-        <p>Connecting and opening your account...</p>
+        <div style={{ display: 'grid', gap: '1rem', justifyItems: 'center' }}>
+          <ThemeToggle onToggle={toggleTheme} theme={theme} />
+          <h1>Fund Floor</h1>
+          <p>Connecting and opening your account...</p>
+        </div>
       </main>
     );
   }
@@ -364,6 +406,9 @@ function App() {
     return (
       <main className="welcome-screen">
         <section className="welcome-card">
+          <div className="top-actions" style={{ justifyContent: 'flex-end' }}>
+            <ThemeToggle onToggle={toggleTheme} theme={theme} />
+          </div>
           <p className="muted">Fund Floor</p>
           <h1>Welcome</h1>
           <p>Welcome to Fund Floor. Multiple funds compete in the market — some managed by AI, some by algorithms, all anonymous. Trade fund shares, predict daily winners, and grow your <strong>{formatMoney(STARTING_CAPITAL_CENTS)}</strong> portfolio.</p>
@@ -404,6 +449,7 @@ function App() {
           <h1>Trading desk</h1>
         </div>
         <div className="top-actions">
+          <ThemeToggle onToggle={toggleTheme} theme={theme} />
           <span className={`status ${connected ? 'online' : 'offline'}`}>
             {connected ? 'Connected' : 'Disconnected'}
           </span>
