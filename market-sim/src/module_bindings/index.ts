@@ -34,12 +34,15 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import BuyFundReducer from "./buy_fund_reducer";
 import BuyStockReducer from "./buy_stock_reducer";
 import SeedMarketReducer from "./seed_market_reducer";
+import SellFundReducer from "./sell_fund_reducer";
 import SellStockReducer from "./sell_stock_reducer";
 import SetGlobalAiConfigReducer from "./set_global_ai_config_reducer";
 import SetLlmConfigReducer from "./set_llm_config_reducer";
 import SetNameReducer from "./set_name_reducer";
+import SubmitPredictionReducer from "./submit_prediction_reducer";
 
 // Import all procedure arg schemas
 import * as GenerateDemoNewsProcedure from "./generate_demo_news_procedure";
@@ -51,15 +54,23 @@ import * as TestGlobalAiConnectionProcedure from "./test_global_ai_connection_pr
 import AiNewsStatusRow from "./ai_news_status_table";
 import AiTraderLogRow from "./ai_trader_log_table";
 import AiTraderMindsRow from "./ai_trader_minds_table";
+import FundRow from "./fund_table";
+import KeyArticleRow from "./key_article_table";
 import LeaderboardRow from "./leaderboard_table";
 import MarketNewsRow from "./market_news_table";
+import MarketClockRow from "./market_clock_table";
+import MarketFundsRow from "./market_funds_table";
 import MarketStocksRow from "./market_stocks_table";
 import MyAccountRow from "./my_account_table";
+import MyDailyPredictionRow from "./my_daily_prediction_table";
+import MyFundHoldingsRow from "./my_fund_holdings_table";
+import MyFundTradesRow from "./my_fund_trades_table";
 import MyHoldingsRow from "./my_holdings_table";
 import MyPlayerRow from "./my_player_table";
 import MyPortfolioHistoryRow from "./my_portfolio_history_table";
 import MyTradesRow from "./my_trades_table";
 import PlayerDirectoryRow from "./player_directory_table";
+import PredictionResultsRow from "./prediction_results_table";
 import RecentTradeRow from "./recent_trade_table";
 import RecentMarketNewsRow from "./recent_market_news_table";
 import StockRow from "./stock_table";
@@ -68,6 +79,34 @@ import StockRow from "./stock_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  fund: __table({
+    name: 'fund',
+    indexes: [
+      { accessor: 'symbol', name: 'fund_symbol_idx_btree', algorithm: 'btree', columns: [
+        'symbol',
+      ] },
+      { accessor: 'updatedAt', name: 'fund_updated_at_idx_btree', algorithm: 'btree', columns: [
+        'updatedAt',
+      ] },
+    ],
+    constraints: [
+      { name: 'fund_symbol_key', constraint: 'unique', columns: ['symbol'] },
+    ],
+  }, FundRow),
+  keyArticle: __table({
+    name: 'key_article',
+    indexes: [
+      { accessor: 'dayIndex', name: 'key_article_day_index_idx_btree', algorithm: 'btree', columns: [
+        'dayIndex',
+      ] },
+      { accessor: 'id', name: 'key_article_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'key_article_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, KeyArticleRow),
   marketNews: __table({
     name: 'market_news',
     indexes: [
@@ -153,6 +192,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, LeaderboardRow),
+  market_clock: __table({
+    name: 'market_clock',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MarketClockRow),
+  market_funds: __table({
+    name: 'market_funds',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MarketFundsRow),
   market_stocks: __table({
     name: 'market_stocks',
     indexes: [
@@ -167,6 +220,27 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyAccountRow),
+  my_daily_prediction: __table({
+    name: 'my_daily_prediction',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyDailyPredictionRow),
+  my_fund_holdings: __table({
+    name: 'my_fund_holdings',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyFundHoldingsRow),
+  my_fund_trades: __table({
+    name: 'my_fund_trades',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyFundTradesRow),
   my_holdings: __table({
     name: 'my_holdings',
     indexes: [
@@ -195,6 +269,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyTradesRow),
+  prediction_results: __table({
+    name: 'prediction_results',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, PredictionResultsRow),
   recent_market_news: __table({
     name: 'recent_market_news',
     indexes: [
@@ -206,12 +287,15 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("buy_fund", BuyFundReducer),
   __reducerSchema("buy_stock", BuyStockReducer),
   __reducerSchema("seed_market", SeedMarketReducer),
+  __reducerSchema("sell_fund", SellFundReducer),
   __reducerSchema("sell_stock", SellStockReducer),
   __reducerSchema("set_global_ai_config", SetGlobalAiConfigReducer),
   __reducerSchema("set_llm_config", SetLlmConfigReducer),
   __reducerSchema("set_name", SetNameReducer),
+  __reducerSchema("submit_prediction", SubmitPredictionReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

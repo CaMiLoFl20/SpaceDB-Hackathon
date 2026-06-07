@@ -1,28 +1,32 @@
-# Market Sim
+# Market Sim / Fund Floor
 
-A multiplayer stock market simulator built on [SpacetimeDB](https://spacetimedb.com). Trade top US tech stocks, compete on a public leaderboard, and watch two AI traders (Nova & Pulse) battle each other and human players.
+A multiplayer fund-trading game built on [SpacetimeDB](https://spacetimedb.com). Players trade shares of public funds while hidden LLM and scripted managers trade an underlying stock market. The player goal is to infer which funds will perform best and grow their own portfolio.
 
-## Features
+## Current Functionality
 
-- **Live trading** — Buy and sell NVDA, AAPL, GOOGL, MSFT, and AMZN; prices move with order size
-- **$10,000 starting capital** — Fresh account on first connect
-- **Private trades** — Your history is only visible to you
-- **Public leaderboard** — Ranked by portfolio value (cash + holdings)
-- **AI trader bots** — Nova AI (aggressive) and Pulse AI (conservative) trade every 30s
-- **LLM-powered bots** — When OpenAI is configured, bots read the market, remember past moves, and decide buy/sell/hold
-- **AI trader log** — Live console showing bot trades and reasoning
-- **Market news** — Generate AI headlines via OpenAI/OpenRouter (optional)
-- **Portfolio chart** — 24h portfolio history
+- **Fund-share trading** — players buy and sell public fund shares through `buy_fund` / `sell_fund`.
+- **Hidden fund managers** — three LLM-managed funds use conservative, moderate, and aggressive trading styles.
+- **Scripted funds** — deterministic/script-managed funds act as non-LLM competitors and decoys.
+- **Randomized public fund names** — manager identities are presented as mutual-fund-style public names for the session.
+- **Underlying stock market** — fund managers trade NVDA, AAPL, GOOGL, MSFT, and AMZN; stock prices move with trade impact.
+- **NAV-backed fund prices** — each fund share price derives from the manager's underlying portfolio value divided by total fund shares.
+- **Limited public float** — each fund has a fixed available share float players can buy from and sell back into.
+- **Player portfolio** — players start with $10,000 and track cash, fund holdings value, total return, private trades, and 24h portfolio history.
+- **Public leaderboard** — ranks players and fund managers by estimated portfolio value.
+- **Market signals** — AI-generated or manual market headlines can react to trading activity without naming human players.
+- **AI settings** — a shared OpenAI/OpenRouter key is stored in SpacetimeDB via `global_ai_config`.
+- **Componentized frontend** — React UI is split into focused `components/` and deterministic `utils/`.
+- **Unit tests** — deterministic finance, chart, fund-pricing, and market-math helpers are covered with Vitest.
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+
 - [SpacetimeDB CLI](https://spacetimedb.com/install) 2.4+
-- (Optional) OpenAI or OpenRouter API key for LLM news and AI trader decisions
+- Optional OpenAI or OpenRouter API key for LLM manager decisions and market news
 
-## Working together (teammate setup)
+## Working Together
 
-Everyone connects to the **same hosted database** so you see the same market, leaderboard, and bots.
+Everyone connects to the same hosted database so you see the same funds, market, leaderboard, and manager activity.
 
 ```bash
 git clone https://github.com/CaMiLoFl20/SpaceDB-Hackathon.git
@@ -31,13 +35,13 @@ cd SpaceDB-Hackathon/market-sim
 npm install
 cd spacetimedb && npm install && cd ..
 
-cp .env.example .env.local   # points at shared maincloud DB
+cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173), pick a nickname, and trade.
+Open the Vite URL printed in the terminal, usually [http://localhost:5173](http://localhost:5173). If that port is busy, Vite will print another port.
 
-### Shared database
+### Shared Database
 
 | Setting | Value |
 |---------|-------|
@@ -45,157 +49,188 @@ Open [http://localhost:5173](http://localhost:5173), pick a nickname, and trade.
 | Database | `market-sim-69q12` |
 | Dashboard | https://spacetimedb.com/market-sim-69q12 |
 
-### API key (one per team)
+### API Key
 
-The OpenAI key lives in the **server** (`global_ai_config` table), not in git.
+The AI key lives in the server (`global_ai_config` table), not in git.
 
-1. Open the app → **AI Settings**
-2. Paste your OpenAI key and save
-3. Confirm **OpenAI: connected** in the header
+1. Open the app.
+2. Open **AI Settings**.
+3. Paste an OpenAI or OpenRouter API key and save.
+4. Confirm the connection state shows connected.
 
-Only one global key is needed for the whole team on the shared DB. Do not commit keys to the repo.
+Only one global key is needed for the shared DB. Do not commit keys.
 
-### Publishing backend changes
+## How Gameplay Works
 
-When you change `spacetimedb/src/`, publish so everyone gets the same logic:
+### Player Loop
 
-```bash
-spacetime publish --module-path spacetimedb --server maincloud -y market-sim-69q12
+Players do not directly trade the underlying stocks in the current UI. They:
+
+1. Review public fund names, prices, day returns, and available float.
+2. Read market signals and manager tape activity.
+3. Buy or sell fund shares.
+4. Compete on total portfolio value.
+
+### Fund Managers
+
+There are five public funds today:
+
+- Three LLM-managed funds: conservative, moderate, aggressive.
+- Two scripted funds: deterministic market participants/decoys.
+
+Managers have large starting balances and trade the underlying stock market. Their public names are randomized mutual-fund-style labels, while their internal manager type is hidden from the player-facing concept.
+
+### Fund Pricing
+
+Each fund has:
+
+- `total_shares`
+- `available_shares`
+- `nav_cents`
+- `price_cents`
+
+The current share price is derived from:
+
+```text
+fund price = manager portfolio NAV / total shares
 ```
 
-Then regenerate client bindings if schema changed:
+Player fund trades update player cash, private fund holdings, private fund trade history, and the fund's available public float.
 
-```bash
-npm run spacetime:generate
-```
+### Underlying Market
 
-**Before publishing:** run `cd spacetimedb && npm run build` locally to catch errors.
+The underlying stock market still exists and drives fund performance:
 
-### Git workflow
+- Seed stocks: NVDA, AAPL, GOOGL, MSFT, AMZN
+- Buys and sells apply basis-point price impact.
+- Fund manager portfolios are valued from cash plus stock holdings.
 
-- `main` — stable shared version
-- Use feature branches and PRs for larger changes
-- Never commit `.env.local` (gitignored)
+## Project Structure
 
-## Quick start (local SpacetimeDB)
-
-Run your own isolated database instead of maincloud:
-
-```bash
-npm install
-cd spacetimedb && npm install && cd ..
-spacetime dev
-```
-
-Open [http://localhost:5173](http://localhost:5173).
-
-## How the market works
-
-### Human trades
-
-- Buys and sells move price via basis-point impact
-- Your trades are private (`my_trades` view)
-
-### AI traders (Nova & Pulse)
-
-- Trade every **30 seconds** via scheduled `ai_trader_llm_tick` procedure
-- With OpenAI configured: LLM reads leaderboard, holdings, cash, and past reasoning
-- Without OpenAI (or on failure): rule-based fallback with distinct personalities
-- Nova: momentum, larger sizes · Pulse: dips, smaller sizes, profit-taking
-
-### Institutional auto-trading
-
-Disabled by default (`AUTOMATIC_MARKET_MOVEMENT = false`). Prices move from **human + bot trades**, not background institutions.
-
-## Project structure
-
-```
+```text
 market-sim/
 ├── spacetimedb/src/
-│   ├── index.ts          # Tables, reducers, procedures, bots, market logic
-│   ├── ai_trader_llm.ts  # LLM prompt + response parsing for bots
-│   └── llm.ts            # OpenAI / OpenRouter HTTP helpers
+│   ├── index.ts              # SpacetimeDB schema, reducers, views, timers
+│   ├── ai_trader_llm.ts      # LLM prompt + response parsing
+│   ├── ai_market_news.ts     # AI news prompt + response parsing
+│   ├── llm.ts                # OpenAI/OpenRouter HTTP helpers
+│   ├── models/               # Fund and AI-manager definitions
+│   └── utils/                # Deterministic backend helpers
 ├── src/
-│   ├── App.tsx           # React dashboard
-│   ├── main.tsx          # SpacetimeDB connection
-│   └── module_bindings/  # Auto-generated — run spacetime:generate after schema changes
-├── .env.example          # Copy to .env.local (not committed)
-└── spacetime.json        # CLI database config
+│   ├── App.tsx               # Data wiring / main page composition
+│   ├── components/           # React UI components
+│   ├── utils/                # Deterministic frontend helpers
+│   ├── main.tsx              # SpacetimeDB connection
+│   └── module_bindings/      # Auto-generated; run spacetime:generate after schema changes
+├── .env.example              # Copy to .env.local
+└── spacetime.json            # CLI database config
 ```
 
-## Server API (module)
+## Server API
 
 ### Reducers
 
 | Reducer | Description |
 |---------|-------------|
-| `buy_stock` / `sell_stock` | Execute trades |
-| `set_name` | Leaderboard nickname |
-| `set_global_ai_config` | Shared LLM key for news + bots |
-| `seed_market` | Idempotent stock seeding |
+| `buy_fund` / `sell_fund` | Player fund-share trading |
+| `buy_stock` / `sell_stock` | Underlying stock execution path, mainly used by managers |
+| `set_name` | Player leaderboard nickname |
+| `set_global_ai_config` | Shared LLM provider/key/model settings |
+| `seed_market` | Idempotently seeds stocks, managers, funds, and timers |
 
 ### Procedures
 
 | Procedure | Description |
 |-----------|-------------|
-| `generate_demo_news` | AI or fallback market news |
-| `get_global_ai_config_status` | Check if AI is configured |
+| `generate_demo_news` | Generate a manual AI market headline |
+| `get_global_ai_config_status` | Check whether shared AI config exists |
 | `test_global_ai_connection` | Ping OpenAI/OpenRouter |
-| `ai_trader_llm_tick` | Scheduled bot trading (internal) |
+| `ai_trader_nova_tick` | Scheduled tick for the conservative LLM manager timer slot |
+| `ai_trader_pulse_tick` | Scheduled tick for the moderate LLM manager timer slot |
+| `ai_trader_apex_tick` | Scheduled tick for the aggressive LLM manager |
+| `ai_market_news_tick` | Scheduled AI news desk check |
 
-### Views
+### Public Tables / Views
 
-| View | Description |
-|------|-------------|
-| `my_account` / `my_holdings` / `my_trades` | Your private data |
-| `leaderboard` | Public rankings |
-| `ai_trader_log` | Bot trade console (public) |
-| `ai_trader_minds` | Bot reasoning + rank (public) |
-| `market_stocks` / `recent_market_news` | Stocks and news feed |
+| View/Table | Description |
+|------------|-------------|
+| `market_funds` | Public fund market: name, symbol, NAV, price, float |
+| `my_fund_holdings` / `my_fund_trades` | Private player fund positions and fund trade history |
+| `my_account` / `my_portfolio_history` | Private player cash and portfolio history |
+| `leaderboard` | Public ranking by estimated portfolio value |
+| `ai_trader_log` | Public manager trade tape |
+| `ai_trader_minds` | Public manager status rows |
+| `market_stocks` | Public underlying stock prices |
+| `recent_market_news` | Public market signal feed |
 
-## npm scripts
+## Development
+
+### Scripts
 
 | Script | Description |
 |--------|-------------|
-| `npm run dev` | Vite dev server |
-| `npm run build` | Production build |
+| `npm run dev` | Start Vite dev server |
+| `npm run build` | Type-check and build frontend |
+| `npm test` | Run Vitest unit tests |
 | `npm run spacetime:generate` | Regenerate TypeScript bindings |
 | `npm run spacetime:publish` | Publish module to maincloud |
 
-## Logs & debugging
+### Backend Build / Publish
+
+When changing `spacetimedb/src/`:
 
 ```bash
-# AI trader decisions
-spacetime logs market-sim-69q12 -f | grep ai_trader_llm
+cd market-sim/spacetimedb
+npm run build
 
-# News generation
-spacetime logs market-sim-69q12 -f | grep generate_demo_news
-
-# OpenAI connection tests
-spacetime logs market-sim-69q12 -f | grep ai_connection
+cd ..
+npm run spacetime:generate
+npm run build
+npm test
+spacetime publish --module-path spacetimedb --server maincloud -y market-sim-69q12
 ```
+
+After publishing, call the seed reducer if you need new seed logic to run immediately:
+
+```bash
+spacetime call --server maincloud market-sim-69q12 seed_market
+```
+
+## Environment Variables
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `VITE_SPACETIMEDB_HOST` | `https://maincloud.spacetimedb.com` | Browser SpacetimeDB host |
+| `VITE_SPACETIMEDB_DB_NAME` | `market-sim-69q12` | Browser database name |
+| `SPACETIMEDB_HOST` | `https://maincloud.spacetimedb.com` | Optional CLI helper |
+| `SPACETIMEDB_DB_NAME` | `market-sim-69q12` | Optional CLI helper |
 
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| Bots not trading | Check logs for `ai_trader_llm`; ensure OpenAI connected or fallback runs |
-| `nonexistent procedure` | Publish latest module + `npm run spacetime:generate` |
-| Schema mismatch in browser | `npm run spacetime:generate` and hard-refresh |
-| `insufficient_quota` | OpenAI billing issue — add credits or use OpenRouter |
-| Empty stocks | Reconnect; `seed_market` runs on connect |
-| Lost API key after publish | Key is in DB — publish does not wipe `global_ai_config` |
+| Browser tries `ws://localhost:3000/v1/database/llm-chat-ts` | Create `.env.local` from `.env.example`, restart Vite, and hard-refresh |
+| `nonexistent reducer/view/table` | Publish latest module and run `npm run spacetime:generate` |
+| Empty funds | Reconnect or call `spacetime call --server maincloud market-sim-69q12 seed_market` |
+| Cannot publish: not a collaborator | Ask DB owner to add your `spacetime login show` identity |
+| Cannot publish: database suspended | Ask DB owner to start/reactivate the database |
+| Bots/managers not trading | Check `spacetime logs market-sim-69q12 -f`; verify AI settings if LLM mode is expected |
+| OpenAI quota errors | Add billing/credits or use OpenRouter |
 
-## Environment variables
+## TODOs Against Initial Spec
 
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `VITE_SPACETIMEDB_HOST` | `https://maincloud.spacetimedb.com` | WebSocket host |
-| `VITE_SPACETIMEDB_DB_NAME` | `market-sim-69q12` | Database name |
+- **True daily round system** — current code uses UTC trading-day fields and live ticks, but there is no explicit round start/end, day close summary, or locked trading window.
+- **Player prediction mechanic** — players can trade fund shares, but there is not yet a separate "predict what to buy/sell today" objective, scoring rule, or prediction submission history.
+- **Stronger information hiding** — the UI hides explicit bot names, but some fields still expose risk/profile text and manager tape details that may be too revealing for the intended mystery.
+- **Fund naming per session** — aliases are deterministic from the trading day; there is no explicit session entity with its own seed, reset, or replay lifecycle.
+- **Share issuance controls** — funds have a fixed float, but there is no admin/reset flow for replenishing float or creating new fund seasons.
+- **LLM behavior tuning** — prompts are functional, but they should be revisited for the final game objective, risk constraints, and anti-collusion/anti-leakage rules.
+- **Script-managed fund diversity** — scripted funds exist, but their strategies are still simple and should be expanded so they are convincing decoys.
+- **Player onboarding/copy** — the UI is usable, but needs clearer game framing without exposing hidden mechanics.
+- **End-to-end tests** — deterministic unit tests exist; browser/SpacetimeDB integration tests are still missing.
+- **Operational admin tools** — no admin UI yet for resetting seasons, rotating fund aliases, inspecting manager internals, or controlling AI/news schedules.
 
-See `.env.example` for a copy-paste template.
-
-## Further reading
+## Further Reading
 
 - [SpacetimeDB TypeScript SDK](https://spacetimedb.com/docs/intro/core-concepts/clients/typescript-reference)
 - [SpacetimeDB CLI install](https://spacetimedb.com/install)

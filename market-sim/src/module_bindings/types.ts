@@ -49,6 +49,12 @@ export const AiSchedulerState = __t.object("AiSchedulerState", {
 });
 export type AiSchedulerState = __Infer<typeof AiSchedulerState>;
 
+export const AiTraderApexTimer = __t.object("AiTraderApexTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type AiTraderApexTimer = __Infer<typeof AiTraderApexTimer>;
+
 export const AiTraderLog = __t.object("AiTraderLog", {});
 export type AiTraderLog = __Infer<typeof AiTraderLog>;
 
@@ -102,6 +108,106 @@ export const AiTraderPulseTimer = __t.object("AiTraderPulseTimer", {
 });
 export type AiTraderPulseTimer = __Infer<typeof AiTraderPulseTimer>;
 
+export const DailyPrediction = __t.object("DailyPrediction", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  dayIndex: __t.u64(),
+  bestFundSymbol: __t.string(),
+  worstFundSymbol: __t.string(),
+  submittedAt: __t.timestamp(),
+  settledAt: __t.option(__t.timestamp()),
+  actualBestFundSymbol: __t.option(__t.string()),
+  actualWorstFundSymbol: __t.option(__t.string()),
+  bestCorrect: __t.bool(),
+  worstCorrect: __t.bool(),
+  bonusCents: __t.u64(),
+});
+export type DailyPrediction = __Infer<typeof DailyPrediction>;
+
+export const DailyPredictionViewRow = __t.object("DailyPredictionViewRow", {
+  dayIndex: __t.u64(),
+  bestFundSymbol: __t.string(),
+  worstFundSymbol: __t.string(),
+  submittedAt: __t.timestamp(),
+  settledAt: __t.option(__t.timestamp()),
+  actualBestFundSymbol: __t.option(__t.string()),
+  actualWorstFundSymbol: __t.option(__t.string()),
+  bestCorrect: __t.bool(),
+  worstCorrect: __t.bool(),
+  bonusCents: __t.u64(),
+});
+export type DailyPredictionViewRow = __Infer<typeof DailyPredictionViewRow>;
+
+export const Fund = __t.object("Fund", {
+  symbol: __t.string(),
+  name: __t.string(),
+  managerIdentityHex: __t.string(),
+  kind: __t.string(),
+  riskProfile: __t.string(),
+  totalShares: __t.u64(),
+  availableShares: __t.u64(),
+  navCents: __t.u64(),
+  priceCents: __t.u64(),
+  previousPriceCents: __t.u64(),
+  dayOpenPriceCents: __t.u64(),
+  tradingDayIndex: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type Fund = __Infer<typeof Fund>;
+
+export const FundHolding = __t.object("FundHolding", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  symbol: __t.string(),
+  shares: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type FundHolding = __Infer<typeof FundHolding>;
+
+export const FundMarketRow = __t.object("FundMarketRow", {
+  symbol: __t.string(),
+  name: __t.string(),
+  kind: __t.string(),
+  riskProfile: __t.string(),
+  totalShares: __t.u64(),
+  availableShares: __t.u64(),
+  navCents: __t.u64(),
+  priceCents: __t.u64(),
+  previousPriceCents: __t.u64(),
+  dayOpenPriceCents: __t.u64(),
+  tradingDayIndex: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type FundMarketRow = __Infer<typeof FundMarketRow>;
+
+export const FundTradeLedger = __t.object("FundTradeLedger", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  totalCents: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type FundTradeLedger = __Infer<typeof FundTradeLedger>;
+
+export const GameClockTimer = __t.object("GameClockTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type GameClockTimer = __Infer<typeof GameClockTimer>;
+
+export const GameDay = __t.object("GameDay", {
+  id: __t.string(),
+  dayIndex: __t.u64(),
+  openedAtMicros: __t.i64(),
+  phase: __t.string(),
+  currentGameMinute: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type GameDay = __Infer<typeof GameDay>;
+
 export const GlobalAiConfig = __t.object("GlobalAiConfig", {
   id: __t.string(),
   provider: __t.string(),
@@ -128,6 +234,19 @@ export const Holding = __t.object("Holding", {
   updatedAt: __t.timestamp(),
 });
 export type Holding = __Infer<typeof Holding>;
+
+export const KeyArticle = __t.object("KeyArticle", {
+  id: __t.u64(),
+  dayIndex: __t.u64(),
+  symbol: __t.string(),
+  sentiment: __t.string(),
+  headline: __t.string(),
+  body: __t.string(),
+  shockBps: __t.i64(),
+  applied: __t.bool(),
+  createdAt: __t.timestamp(),
+});
+export type KeyArticle = __Infer<typeof KeyArticle>;
 
 export const Leaderboard = __t.object("Leaderboard", {});
 export type Leaderboard = __Infer<typeof Leaderboard>;
@@ -158,6 +277,58 @@ export const LlmConfigStatus = __t.object("LlmConfigStatus", {
 });
 export type LlmConfigStatus = __Infer<typeof LlmConfigStatus>;
 
+export const ManagerTradingPlan = __t.object("ManagerTradingPlan", {
+  id: __t.u64(),
+  manager: __t.identity(),
+  fundSymbol: __t.string(),
+  dayIndex: __t.u64(),
+  thesis: __t.string(),
+  riskPosture: __t.string(),
+  source: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ManagerTradingPlan = __Infer<typeof ManagerTradingPlan>;
+
+export const ManagerTradingPlanStep = __t.object("ManagerTradingPlanStep", {
+  id: __t.u64(),
+  planId: __t.u64(),
+  manager: __t.identity(),
+  fundSymbol: __t.string(),
+  dayIndex: __t.u64(),
+  gameMinute: __t.u64(),
+  action: __t.string(),
+  symbol: __t.string(),
+  shares: __t.u64(),
+  reasoning: __t.string(),
+  executed: __t.bool(),
+  executedAt: __t.option(__t.timestamp()),
+});
+export type ManagerTradingPlanStep = __Infer<typeof ManagerTradingPlanStep>;
+
+export const MarketActivityTimer = __t.object("MarketActivityTimer", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type MarketActivityTimer = __Infer<typeof MarketActivityTimer>;
+
+export const MarketClock = __t.object("MarketClock", {});
+export type MarketClock = __Infer<typeof MarketClock>;
+
+export const MarketClockRow = __t.object("MarketClockRow", {
+  dayIndex: __t.u64(),
+  phase: __t.string(),
+  currentGameMinute: __t.u64(),
+  currentGameTimeLabel: __t.string(),
+  secondsUntilClose: __t.u64(),
+  secondsUntilNextDay: __t.u64(),
+  tradesAllowed: __t.bool(),
+  predictionsAllowed: __t.bool(),
+});
+export type MarketClockRow = __Infer<typeof MarketClockRow>;
+
+export const MarketFunds = __t.object("MarketFunds", {});
+export type MarketFunds = __Infer<typeof MarketFunds>;
+
 export const MarketNews = __t.object("MarketNews", {
   id: __t.u64(),
   headline: __t.string(),
@@ -173,6 +344,15 @@ export type MarketStocks = __Infer<typeof MarketStocks>;
 
 export const MyAccount = __t.object("MyAccount", {});
 export type MyAccount = __Infer<typeof MyAccount>;
+
+export const MyDailyPrediction = __t.object("MyDailyPrediction", {});
+export type MyDailyPrediction = __Infer<typeof MyDailyPrediction>;
+
+export const MyFundHoldings = __t.object("MyFundHoldings", {});
+export type MyFundHoldings = __Infer<typeof MyFundHoldings>;
+
+export const MyFundTrades = __t.object("MyFundTrades", {});
+export type MyFundTrades = __Infer<typeof MyFundTrades>;
 
 export const MyHoldings = __t.object("MyHoldings", {});
 export type MyHoldings = __Infer<typeof MyHoldings>;
@@ -208,6 +388,9 @@ export const PortfolioSnapshot = __t.object("PortfolioSnapshot", {
   recordedAt: __t.timestamp(),
 });
 export type PortfolioSnapshot = __Infer<typeof PortfolioSnapshot>;
+
+export const PredictionResults = __t.object("PredictionResults", {});
+export type PredictionResults = __Infer<typeof PredictionResults>;
 
 export const RecentMarketNews = __t.object("RecentMarketNews", {});
 export type RecentMarketNews = __Infer<typeof RecentMarketNews>;

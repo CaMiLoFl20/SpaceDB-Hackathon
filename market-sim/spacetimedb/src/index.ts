@@ -17,17 +17,55 @@ import {
   type LlmTraderDecision,
 } from './ai_trader_llm';
 import {
+  buildTradingPlanLlmMessages,
+  maxPlanSharesForRisk,
+  parseTradingPlanLlmResponse,
+  type LlmTradingPlan,
+  type LlmTradingPlanStep,
+} from './ai_trading_plan';
+import {
   callChat,
   formatChatError,
   providers,
   type ChatMessage,
 } from './llm';
+import {
+  AI_FUND_DEFINITIONS,
+  AI_TRADER_BOTS,
+  type AiTraderBot,
+} from './models/ai_traders';
+import {
+  FUND_PUBLIC_FLOAT_SHARES,
+  FUND_STARTING_NAV_CENTS,
+  FUND_TOTAL_SHARES,
+  SCRIPTED_FUND_DEFINITIONS,
+  computeFundSharePriceCents,
+  fundAliasFor,
+} from './models/funds';
+import {
+  MAX_U64,
+  centsToDollarString,
+  multiplyCents,
+  percentChangeBps,
+} from './utils/money';
+import { applyPriceImpact } from './utils/market_math';
+import {
+  FREEZE_MICROS,
+  GAME_DAY_CLOSE_MINUTE,
+  GAME_DAY_OPEN_MINUTE,
+  OPEN_SESSION_MICROS,
+  deriveGameClockState,
+  formatGameMinute,
+  shouldRollToNextDay,
+} from './utils/game_day';
+import {
+  rankFundsForPrediction,
+  settlePrediction,
+} from './utils/predictions';
 
 const STARTING_BALANCE_CENTS = 1_000_000n;
+const FUND_MANAGER_STARTING_BALANCE_CENTS = 100_000_000_000n;
 const MAX_NAME_LENGTH = 20;
-const MAX_U64 = (1n << 64n) - 1n;
-const MIN_PRICE_CENTS = 100n;
-const BASIS_POINTS_SCALE = 10_000n;
 const LARGE_HUMAN_TRADE_SHARES = 500n;
 const PROFIT_TAKING_MIN_BPS = 800n;
 const TICK_BUY_CHANCE = 50n;
@@ -40,17 +78,23 @@ const AI_TRADER_BOTS_ENABLED = true;
 const AI_TRADER_LLM_ENABLED = true;
 const AI_AUTO_NEWS_ENABLED = true;
 const MARKET_TICK_INTERVAL_MICROS = 30_000_000n;
+const GAME_CLOCK_TICK_INTERVAL_MICROS = 1_000_000n;
+const MARKET_ACTIVITY_TICK_INTERVAL_MICROS = 5_000_000n;
 const AI_NEWS_TRADE_BUMP_MICROS = 12_000_000n;
 const AI_NEWS_MIN_CHECK_MICROS = 25_000_000n;
 const AI_NEWS_MAX_CHECK_MICROS = 180_000_000n;
 const AI_TRADER_MIN_CHECK_MICROS = 20_000_000n;
 const AI_TRADER_MAX_CHECK_MICROS = 120_000_000n;
-const AI_NOVA_INITIAL_DELAY_MICROS = 18_000_000n;
-const AI_PULSE_INITIAL_DELAY_MICROS = 52_000_000n;
+const AI_CEDAR_INITIAL_DELAY_MICROS = 18_000_000n;
+const AI_HARBOR_INITIAL_DELAY_MICROS = 38_000_000n;
+const AI_APEX_INITIAL_DELAY_MICROS = 58_000_000n;
 const AI_NEWS_INITIAL_DELAY_MICROS = 35_000_000n;
 const MICROS_PER_DAY = 86_400_000_000n;
 const HOUR_MICROS = 3_600_000_000n;
 const PORTFOLIO_HISTORY_HOURS = 24n;
+const KEY_ARTICLE_CHANCE_DIVISOR = 7n;
+const KEY_ARTICLE_MIN_SHOCK_BPS = 1_200n;
+const KEY_ARTICLE_MAX_SHOCK_BPS = 3_000n;
 
 const AI_INSTITUTIONS = [
   'Titan Capital',
@@ -59,37 +103,6 @@ const AI_INSTITUTIONS = [
   'Helios Market Making',
   'Sentinel Asset Management',
 ] as const;
-
-const AI_TRADER_BOTS = [
-  {
-    name: 'Nova AI',
-    nameKey: 'nova ai',
-    personality: 'aggressive',
-    styleLabel: 'Aggressive momentum chaser',
-    identityHex:
-      '0000000000000000000000000000000000000000000000000000000000000b01',
-    actChance: 88n,
-    minSpendPct: 10n,
-    maxSpendPct: 28n,
-    minTradeCap: 5n,
-    maxTradeCap: 25n,
-  },
-  {
-    name: 'Pulse AI',
-    nameKey: 'pulse ai',
-    personality: 'conservative',
-    styleLabel: 'Conservative value trader',
-    identityHex:
-      '0000000000000000000000000000000000000000000000000000000000000b02',
-    actChance: 52n,
-    minSpendPct: 2n,
-    maxSpendPct: 8n,
-    minTradeCap: 1n,
-    maxTradeCap: 8n,
-  },
-] as const;
-
-type AiTraderBot = (typeof AI_TRADER_BOTS)[number];
 
 // Top 5 US companies by market cap (June 2026). Prices are seed values in cents.
 const SEED_STOCKS = [
@@ -123,6 +136,68 @@ const tickTimerRow = {
   scheduledAt: t.scheduleAt(),
 };
 
+const gameDayRow = {
+  id: t.string().primaryKey(),
+  dayIndex: t.u64(),
+  openedAtMicros: t.i64(),
+  phase: t.string(),
+  currentGameMinute: t.u64(),
+  updatedAt: t.timestamp(),
+};
+
+const dailyPredictionRow = {
+  id: t.u64().primaryKey().autoInc(),
+  owner: t.identity().index('btree'),
+  dayIndex: t.u64().index('btree'),
+  bestFundSymbol: t.string(),
+  worstFundSymbol: t.string(),
+  submittedAt: t.timestamp(),
+  settledAt: t.timestamp().optional(),
+  actualBestFundSymbol: t.string().optional(),
+  actualWorstFundSymbol: t.string().optional(),
+  bestCorrect: t.bool(),
+  worstCorrect: t.bool(),
+  bonusCents: t.u64(),
+};
+
+const managerTradingPlanRow = {
+  id: t.u64().primaryKey().autoInc(),
+  manager: t.identity().index('btree'),
+  fundSymbol: t.string().index('btree'),
+  dayIndex: t.u64().index('btree'),
+  thesis: t.string(),
+  riskPosture: t.string(),
+  source: t.string(),
+  createdAt: t.timestamp(),
+};
+
+const managerTradingPlanStepRow = {
+  id: t.u64().primaryKey().autoInc(),
+  planId: t.u64().index('btree'),
+  manager: t.identity().index('btree'),
+  fundSymbol: t.string(),
+  dayIndex: t.u64().index('btree'),
+  gameMinute: t.u64(),
+  action: t.string(),
+  symbol: t.string(),
+  shares: t.u64(),
+  reasoning: t.string(),
+  executed: t.bool(),
+  executedAt: t.timestamp().optional(),
+};
+
+const keyArticleRow = {
+  id: t.u64().primaryKey().autoInc(),
+  dayIndex: t.u64().index('btree'),
+  symbol: t.string(),
+  sentiment: t.string(),
+  headline: t.string(),
+  body: t.string(),
+  shockBps: t.i64(),
+  applied: t.bool(),
+  createdAt: t.timestamp(),
+};
+
 const stockRow = {
   symbol: t.string().primaryKey(),
   name: t.string(),
@@ -146,6 +221,41 @@ const holdingRow = {
   symbol: t.string().index('btree'),
   shares: t.u64(),
   updatedAt: t.timestamp(),
+};
+
+const fundRow = {
+  symbol: t.string().primaryKey(),
+  name: t.string(),
+  managerIdentityHex: t.string(),
+  kind: t.string(),
+  riskProfile: t.string(),
+  totalShares: t.u64(),
+  availableShares: t.u64(),
+  navCents: t.u64(),
+  priceCents: t.u64(),
+  previousPriceCents: t.u64(),
+  dayOpenPriceCents: t.u64(),
+  tradingDayIndex: t.u64(),
+  updatedAt: t.timestamp().index('btree'),
+};
+
+const fundHoldingRow = {
+  id: t.u64().primaryKey().autoInc(),
+  owner: t.identity().index('btree'),
+  symbol: t.string().index('btree'),
+  shares: t.u64(),
+  updatedAt: t.timestamp(),
+};
+
+const fundTradeLedgerRow = {
+  id: t.u64().primaryKey().autoInc(),
+  owner: t.identity().index('btree'),
+  symbol: t.string(),
+  side: t.string(),
+  shares: t.u64(),
+  priceCents: t.u64(),
+  totalCents: t.u64(),
+  createdAt: t.timestamp(),
 };
 
 const tradeLedgerRow = {
@@ -206,6 +316,45 @@ const leaderboardRow = t.object('LeaderboardRow', {
   name: t.string(),
   balanceCents: t.u64(),
   estimatedPortfolioValueCents: t.u64(),
+});
+
+const fundMarketRow = t.object('FundMarketRow', {
+  symbol: t.string(),
+  name: t.string(),
+  kind: t.string(),
+  riskProfile: t.string(),
+  totalShares: t.u64(),
+  availableShares: t.u64(),
+  navCents: t.u64(),
+  priceCents: t.u64(),
+  previousPriceCents: t.u64(),
+  dayOpenPriceCents: t.u64(),
+  tradingDayIndex: t.u64(),
+  updatedAt: t.timestamp(),
+});
+
+const marketClockRow = t.object('MarketClockRow', {
+  dayIndex: t.u64(),
+  phase: t.string(),
+  currentGameMinute: t.u64(),
+  currentGameTimeLabel: t.string(),
+  secondsUntilClose: t.u64(),
+  secondsUntilNextDay: t.u64(),
+  tradesAllowed: t.bool(),
+  predictionsAllowed: t.bool(),
+});
+
+const dailyPredictionViewRow = t.object('DailyPredictionViewRow', {
+  dayIndex: t.u64(),
+  bestFundSymbol: t.string(),
+  worstFundSymbol: t.string(),
+  submittedAt: t.timestamp(),
+  settledAt: t.timestamp().optional(),
+  actualBestFundSymbol: t.string().optional(),
+  actualWorstFundSymbol: t.string().optional(),
+  bestCorrect: t.bool(),
+  worstCorrect: t.bool(),
+  bonusCents: t.u64(),
 });
 
 const AI_TRADER_LOG_LIMIT = 50;
@@ -272,6 +421,20 @@ const tickTimer = table(
   },
   tickTimerRow
 );
+const gameClockTimer = table(
+  {
+    name: 'game_clock_timer',
+    scheduled: (): any => game_clock_tick,
+  },
+  tickTimerRow
+);
+const marketActivityTimer = table(
+  {
+    name: 'market_activity_timer',
+    scheduled: (): any => market_activity_tick,
+  },
+  tickTimerRow
+);
 const aiTraderNovaTimer = table(
   {
     name: 'ai_trader_nova_timer',
@@ -286,6 +449,13 @@ const aiTraderPulseTimer = table(
   },
   scheduledTimerRow
 );
+const aiTraderApexTimer = table(
+  {
+    name: 'ai_trader_apex_timer',
+    scheduled: (): any => ai_trader_apex_tick,
+  },
+  scheduledTimerRow
+);
 const aiMarketNewsTimer = table(
   {
     name: 'ai_market_news_timer',
@@ -295,9 +465,20 @@ const aiMarketNewsTimer = table(
 );
 const aiSchedulerState = table({ name: 'ai_scheduler_state' }, aiSchedulerStateRow);
 const aiTraderMemory = table({ name: 'ai_trader_memory' }, aiTraderMemoryRow);
+const gameDay = table({ name: 'game_day' }, gameDayRow);
+const dailyPrediction = table({ name: 'daily_prediction' }, dailyPredictionRow);
+const managerTradingPlan = table({ name: 'manager_trading_plan' }, managerTradingPlanRow);
+const managerTradingPlanStep = table(
+  { name: 'manager_trading_plan_step' },
+  managerTradingPlanStepRow
+);
+const keyArticle = table({ name: 'key_article', public: true }, keyArticleRow);
 const stock = table({ name: 'stock', public: true }, stockRow);
+const fund = table({ name: 'fund', public: true }, fundRow);
 const account = table({ name: 'account' }, accountRow);
 const holding = table({ name: 'holding' }, holdingRow);
+const fundHolding = table({ name: 'fund_holding' }, fundHoldingRow);
+const fundTradeLedger = table({ name: 'fund_trade_ledger' }, fundTradeLedgerRow);
 const tradeLedger = table({ name: 'trade_ledger' }, tradeLedgerRow);
 const recentTrade = table({ name: 'recent_trade', public: true }, recentTradeRow);
 const marketNews = table({ name: 'market_news', public: true }, marketNewsRow);
@@ -323,14 +504,25 @@ const spacetimedb = schema({
   llmConfig,
   globalAiConfig,
   tickTimer,
+  gameClockTimer,
+  marketActivityTimer,
   aiTraderNovaTimer,
   aiTraderPulseTimer,
+  aiTraderApexTimer,
   aiMarketNewsTimer,
   aiSchedulerState,
   aiTraderMemory,
+  gameDay,
+  dailyPrediction,
+  managerTradingPlan,
+  managerTradingPlanStep,
+  keyArticle,
   stock,
+  fund,
   account,
   holding,
+  fundHolding,
+  fundTradeLedger,
   tradeLedger,
   recentTrade,
   marketNews,
@@ -340,6 +532,7 @@ const spacetimedb = schema({
 export default spacetimedb;
 
 type ModuleCtx = ReducerCtx<typeof spacetimedb.schemaType>;
+const GAME_DAY_STATE_ID = 'global';
 
 function senderError(message: string): never {
   throw new SenderError(message);
@@ -380,6 +573,46 @@ function requireAccount(ctx: ModuleCtx) {
   return row;
 }
 
+function currentGameDay(ctx: SeedCtx) {
+  return ctx.db.gameDay.id.find(GAME_DAY_STATE_ID);
+}
+
+function requireGameDay(ctx: ModuleCtx) {
+  const row = currentGameDay(ctx);
+  if (!row) senderError('Game day is not ready yet');
+  return row;
+}
+
+function ensureGameDaySeeded(ctx: SeedCtx): void {
+  const existing = currentGameDay(ctx);
+  if (existing) return;
+  ctx.db.gameDay.insert({
+    id: GAME_DAY_STATE_ID,
+    dayIndex: 1n,
+    openedAtMicros: ctx.timestamp.microsSinceUnixEpoch,
+    phase: 'open',
+    currentGameMinute: GAME_DAY_OPEN_MINUTE,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function gameClockFor(ctx: SeedCtx) {
+  const day = currentGameDay(ctx);
+  if (!day) {
+    return deriveGameClockState(ctx.timestamp.microsSinceUnixEpoch, ctx.timestamp.microsSinceUnixEpoch);
+  }
+  return deriveGameClockState(day.openedAtMicros, ctx.timestamp.microsSinceUnixEpoch);
+}
+
+function tradesAreAllowed(ctx: SeedCtx): boolean {
+  ensureGameDaySeeded(ctx);
+  return gameClockFor(ctx).tradesAllowed;
+}
+
+function requireTradingOpen(ctx: ModuleCtx): void {
+  if (!tradesAreAllowed(ctx)) senderError('Trading is frozen until the next day starts');
+}
+
 function requireStock(ctx: ModuleCtx, symbol: string) {
   const trimmed = symbol.trim().toUpperCase();
   if (trimmed.length === 0) senderError('Stock symbol is required');
@@ -393,14 +626,30 @@ function validateShares(shares: bigint): void {
 }
 
 function tradeTotalCents(priceCents: bigint, shares: bigint): bigint {
-  if (shares > 0n && priceCents > MAX_U64 / shares) {
+  try {
+    return multiplyCents(priceCents, shares);
+  } catch {
     senderError('Trade total is too large');
   }
-  return priceCents * shares;
 }
 
 function findHolding(ctx: ModuleCtx, owner: ModuleCtx['sender'], symbol: string) {
   for (const row of ctx.db.holding.owner.filter(owner)) {
+    if (row.symbol === symbol) return row;
+  }
+  return undefined;
+}
+
+function requireFund(ctx: ModuleCtx, symbol: string) {
+  const trimmed = symbol.trim().toUpperCase();
+  if (trimmed.length === 0) senderError('Fund symbol is required');
+  const row = ctx.db.fund.symbol.find(trimmed);
+  if (!row) senderError(`Unknown fund symbol: ${trimmed}`);
+  return row;
+}
+
+function findFundHolding(ctx: ModuleCtx, owner: ModuleCtx['sender'], symbol: string) {
+  for (const row of ctx.db.fundHolding.owner.filter(owner)) {
     if (row.symbol === symbol) return row;
   }
   return undefined;
@@ -422,6 +671,12 @@ function computePortfolioValueCents(
     const stockRow = ctx.db.stock.symbol.find(position.symbol);
     if (!stockRow) continue;
     holdingsValue += position.shares * stockRow.priceCents;
+  }
+
+  for (const position of ctx.db.fundHolding.owner.filter(owner)) {
+    const fundRow = ctx.db.fund.symbol.find(position.symbol);
+    if (!fundRow) continue;
+    holdingsValue += position.shares * fundRow.priceCents;
   }
 
   const total = playerAccount.balanceCents + holdingsValue;
@@ -478,6 +733,20 @@ function botIdentity(hex: string): PlayerIdentity {
   return new Identity(hex);
 }
 
+function publicFundName(symbol: string, ctx: TimeCtx): string {
+  return fundAliasFor(symbol, utcTradingDayIndex(ctx.timestamp.microsSinceUnixEpoch));
+}
+
+function allFundDefinitions() {
+  return [...AI_FUND_DEFINITIONS, ...SCRIPTED_FUND_DEFINITIONS];
+}
+
+function findFundDefinitionByManager(owner: PlayerIdentity) {
+  return allFundDefinitions().find(definition =>
+    botIdentity(definition.managerIdentityHex).isEqual(owner)
+  );
+}
+
 function isAiTraderIdentity(owner: PlayerIdentity): boolean {
   for (const bot of AI_TRADER_BOTS) {
     if (botIdentity(bot.identityHex).isEqual(owner)) return true;
@@ -491,19 +760,57 @@ function ensureAiTradersSeeded(ctx: TimeCtx): void {
   for (const bot of AI_TRADER_BOTS) {
     const owner = botIdentity(bot.identityHex);
 
-    if (!ctx.db.account.owner.find(owner)) {
+    const existingAccount = ctx.db.account.owner.find(owner);
+    if (!existingAccount) {
       ctx.db.account.insert({
         owner,
-        balanceCents: STARTING_BALANCE_CENTS,
+        balanceCents: FUND_MANAGER_STARTING_BALANCE_CENTS,
+        updatedAt: ctx.timestamp,
+      });
+    } else if (existingAccount.balanceCents < FUND_MANAGER_STARTING_BALANCE_CENTS) {
+      ctx.db.account.owner.update({
+        ...existingAccount,
+        balanceCents: FUND_MANAGER_STARTING_BALANCE_CENTS,
         updatedAt: ctx.timestamp,
       });
     }
 
     if (!ctx.db.playerDirectory.owner.find(owner)) {
+      const publicName = publicFundName(bot.fundSymbol, ctx);
       ctx.db.playerDirectory.insert({
         owner,
-        name: bot.name,
-        nameKey: bot.nameKey,
+        name: publicName,
+        nameKey: publicName.toLowerCase(),
+        updatedAt: ctx.timestamp,
+      });
+    }
+  }
+}
+
+function ensureScriptedFundManagersSeeded(ctx: TimeCtx): void {
+  for (const definition of SCRIPTED_FUND_DEFINITIONS) {
+    const owner = botIdentity(definition.managerIdentityHex);
+    const existingAccount = ctx.db.account.owner.find(owner);
+    if (!existingAccount) {
+      ctx.db.account.insert({
+        owner,
+        balanceCents: FUND_MANAGER_STARTING_BALANCE_CENTS,
+        updatedAt: ctx.timestamp,
+      });
+    } else if (existingAccount.balanceCents < FUND_MANAGER_STARTING_BALANCE_CENTS) {
+      ctx.db.account.owner.update({
+        ...existingAccount,
+        balanceCents: FUND_MANAGER_STARTING_BALANCE_CENTS,
+        updatedAt: ctx.timestamp,
+      });
+    }
+
+    if (!ctx.db.playerDirectory.owner.find(owner)) {
+      const publicName = publicFundName(definition.symbol, ctx);
+      ctx.db.playerDirectory.insert({
+        owner,
+        name: publicName,
+        nameKey: publicName.toLowerCase(),
         updatedAt: ctx.timestamp,
       });
     }
@@ -549,6 +856,10 @@ function executeBuyForOwner(
   strict: boolean
 ): boolean {
   validateShares(shares);
+  if (!tradesAreAllowed(ctx)) {
+    if (strict) senderError('Trading is frozen until the next day starts');
+    return false;
+  }
 
   const playerAccount = ctx.db.account.owner.find(owner);
   if (!playerAccount) {
@@ -600,6 +911,8 @@ function executeBuyForOwner(
     maybeInstitutionalProfitTaking(ctx, currentStock);
   }
   recordPortfolioSnapshot(ctx, owner);
+  const fundDefinition = findFundDefinitionByManager(owner);
+  if (fundDefinition) refreshFundPrice(ctx, fundDefinition.symbol);
   requestPromptNewsCheck(ctx);
   return true;
 }
@@ -612,6 +925,10 @@ function executeSellForOwner(
   strict: boolean
 ): boolean {
   validateShares(shares);
+  if (!tradesAreAllowed(ctx)) {
+    if (strict) senderError('Trading is frozen until the next day starts');
+    return false;
+  }
 
   const playerAccount = ctx.db.account.owner.find(owner);
   if (!playerAccount) {
@@ -656,7 +973,156 @@ function executeSellForOwner(
     reactInstitutionalToHumanSell(ctx, currentStock, shares);
   }
   recordPortfolioSnapshot(ctx, owner);
+  const fundDefinition = findFundDefinitionByManager(owner);
+  if (fundDefinition) refreshFundPrice(ctx, fundDefinition.symbol);
   requestPromptNewsCheck(ctx);
+  return true;
+}
+
+function recordFundTrade(
+  ctx: ModuleCtx,
+  owner: PlayerIdentity,
+  symbol: string,
+  side: 'buy' | 'sell',
+  shares: bigint,
+  priceCents: bigint,
+  totalCents: bigint
+): void {
+  ctx.db.fundTradeLedger.insert({
+    id: 0n,
+    owner,
+    symbol,
+    side,
+    shares,
+    priceCents,
+    totalCents,
+    createdAt: ctx.timestamp,
+  });
+}
+
+function executeBuyFundForOwner(
+  ctx: ModuleCtx,
+  owner: PlayerIdentity,
+  symbol: string,
+  shares: bigint,
+  strict: boolean
+): boolean {
+  validateShares(shares);
+  if (!tradesAreAllowed(ctx)) {
+    if (strict) senderError('Trading is frozen until the next day starts');
+    return false;
+  }
+  const playerAccount = ctx.db.account.owner.find(owner);
+  if (!playerAccount) {
+    if (strict) senderError('Account is not ready yet');
+    return false;
+  }
+
+  const fundRow = requireFund(ctx, symbol);
+  if (fundRow.availableShares < shares) {
+    if (strict) senderError('Not enough fund shares available');
+    return false;
+  }
+
+  const totalCents = tradeTotalCents(fundRow.priceCents, shares);
+  if (playerAccount.balanceCents < totalCents) {
+    if (strict) senderError('Insufficient funds');
+    return false;
+  }
+
+  ctx.db.account.owner.update({
+    ...playerAccount,
+    balanceCents: playerAccount.balanceCents - totalCents,
+    updatedAt: ctx.timestamp,
+  });
+
+  const existingHolding = findFundHolding(ctx, owner, fundRow.symbol);
+  if (existingHolding) {
+    if (existingHolding.shares > MAX_U64 - shares) {
+      if (strict) senderError('Share count is too large');
+      return false;
+    }
+    ctx.db.fundHolding.id.update({
+      ...existingHolding,
+      shares: existingHolding.shares + shares,
+      updatedAt: ctx.timestamp,
+    });
+  } else {
+    ctx.db.fundHolding.insert({
+      id: 0n,
+      owner,
+      symbol: fundRow.symbol,
+      shares,
+      updatedAt: ctx.timestamp,
+    });
+  }
+
+  ctx.db.fund.symbol.update({
+    ...fundRow,
+    availableShares: fundRow.availableShares - shares,
+    updatedAt: ctx.timestamp,
+  });
+  recordFundTrade(ctx, owner, fundRow.symbol, 'buy', shares, fundRow.priceCents, totalCents);
+  recordPortfolioSnapshot(ctx, owner);
+  return true;
+}
+
+function executeSellFundForOwner(
+  ctx: ModuleCtx,
+  owner: PlayerIdentity,
+  symbol: string,
+  shares: bigint,
+  strict: boolean
+): boolean {
+  validateShares(shares);
+  if (!tradesAreAllowed(ctx)) {
+    if (strict) senderError('Trading is frozen until the next day starts');
+    return false;
+  }
+  const playerAccount = ctx.db.account.owner.find(owner);
+  if (!playerAccount) {
+    if (strict) senderError('Account is not ready yet');
+    return false;
+  }
+
+  const fundRow = requireFund(ctx, symbol);
+  const existingHolding = findFundHolding(ctx, owner, fundRow.symbol);
+  if (!existingHolding || existingHolding.shares < shares) {
+    if (strict) senderError('Insufficient fund shares');
+    return false;
+  }
+
+  const totalCents = tradeTotalCents(fundRow.priceCents, shares);
+  if (playerAccount.balanceCents > MAX_U64 - totalCents) {
+    if (strict) senderError('Balance is too large');
+    return false;
+  }
+
+  ctx.db.account.owner.update({
+    ...playerAccount,
+    balanceCents: playerAccount.balanceCents + totalCents,
+    updatedAt: ctx.timestamp,
+  });
+
+  if (existingHolding.shares === shares) {
+    ctx.db.fundHolding.delete(existingHolding);
+  } else {
+    ctx.db.fundHolding.id.update({
+      ...existingHolding,
+      shares: existingHolding.shares - shares,
+      updatedAt: ctx.timestamp,
+    });
+  }
+
+  const availableShares =
+    fundRow.availableShares > MAX_U64 - shares ? MAX_U64 : fundRow.availableShares + shares;
+  ctx.db.fund.symbol.update({
+    ...fundRow,
+    availableShares,
+    updatedAt: ctx.timestamp,
+  });
+  recordFundTrade(ctx, owner, fundRow.symbol, 'sell', shares, fundRow.priceCents, totalCents);
+  recordPortfolioSnapshot(ctx, owner);
   return true;
 }
 
@@ -729,6 +1195,56 @@ function runAiTraderCompetition(ctx: ModuleCtx): void {
   }
 }
 
+function runScriptedFundCompetition(ctx: ModuleCtx): void {
+  const stocks = [...ctx.db.stock.iter()];
+  if (stocks.length === 0) return;
+
+  const micros = ctx.timestamp.microsSinceUnixEpoch;
+  SCRIPTED_FUND_DEFINITIONS.forEach((definition, index) => {
+    const owner = botIdentity(definition.managerIdentityHex);
+    const seed = actionSeed(ctx, definition.symbol, micros, BigInt(index + 201));
+    const botLike: AiTraderBot = {
+      name: definition.internalName,
+      nameKey: definition.internalName.toLowerCase(),
+      personality: definition.riskProfile,
+      styleLabel: `${definition.riskProfile} scripted fund`,
+      fundSymbol: definition.symbol,
+      identityHex: definition.managerIdentityHex,
+      actChance: definition.riskProfile === 'aggressive' ? 82n : 62n,
+      minSpendPct: definition.riskProfile === 'aggressive' ? 8n : 4n,
+      maxSpendPct: definition.riskProfile === 'aggressive' ? 24n : 14n,
+      minTradeCap: definition.riskProfile === 'aggressive' ? 4n : 2n,
+      maxTradeCap: definition.riskProfile === 'aggressive' ? 22n : 12n,
+    };
+    if (!shouldAct(seed, botLike.actChance)) return;
+
+    const account = ctx.db.account.owner.find(owner);
+    if (!account) return;
+    const preferBuy = seed % 5n !== 0n;
+
+    if (preferBuy) {
+      const stockRow = pickBotStock(botLike, stocks, seed, index);
+      const shares = pickBotBuyShares(
+        botLike,
+        account.balanceCents,
+        stockRow.priceCents,
+        seed
+      );
+      if (shares > 0n && executeBuyForOwner(ctx, owner, stockRow.symbol, shares, false)) {
+        return;
+      }
+    }
+
+    const holdings = [...ctx.db.holding.owner.filter(owner)];
+    if (holdings.length === 0) return;
+    const holding = holdings[Number((seed / 23n) % BigInt(holdings.length))]!;
+    const sellShares = pickBotSellShares(botLike, holding.shares, seed);
+    if (sellShares > 0n) {
+      executeSellForOwner(ctx, owner, holding.symbol, sellShares, false);
+    }
+  });
+}
+
 type StockRow = {
   symbol: string;
   name: string;
@@ -769,32 +1285,8 @@ function rollAllStockTradingDays(ctx: TimeCtx): void {
   }
 }
 
-function impactBasisPoints(shares: bigint): bigint {
-  const raw = shares / 10n;
-  if (raw < 5n) return 5n;
-  if (raw > 1000n) return 1000n;
-  return raw;
-}
-
-function applyPriceImpact(
-  priceCents: bigint,
-  direction: 'buy' | 'sell',
-  shares: bigint
-): { previousPriceCents: bigint; priceCents: bigint } {
-  const bps = impactBasisPoints(shares);
-  const previousPriceCents = priceCents;
-  const factor =
-    direction === 'buy'
-      ? BASIS_POINTS_SCALE + bps
-      : BASIS_POINTS_SCALE - bps;
-  let nextPrice = (priceCents * factor) / BASIS_POINTS_SCALE;
-  if (nextPrice < MIN_PRICE_CENTS) nextPrice = MIN_PRICE_CENTS;
-  return { previousPriceCents, priceCents: nextPrice };
-}
-
 function priceIncreaseBps(fromPriceCents: bigint, toPriceCents: bigint): bigint {
-  if (fromPriceCents === 0n) return 0n;
-  return ((toPriceCents - fromPriceCents) * BASIS_POINTS_SCALE) / fromPriceCents;
+  return percentChangeBps(fromPriceCents, toPriceCents);
 }
 
 function actionSeed(
@@ -1325,6 +1817,24 @@ function ensureMarketTickScheduled(ctx: SeedCtx): void {
   });
 }
 
+function ensureGameClockTimerScheduled(ctx: SeedCtx): void {
+  const hasTimer = [...ctx.db.gameClockTimer.iter()].length > 0;
+  if (hasTimer) return;
+  ctx.db.gameClockTimer.insert({
+    scheduledId: 0n,
+    scheduledAt: ScheduleAt.interval(GAME_CLOCK_TICK_INTERVAL_MICROS),
+  });
+}
+
+function ensureMarketActivityTimerScheduled(ctx: SeedCtx): void {
+  const hasTimer = [...ctx.db.marketActivityTimer.iter()].length > 0;
+  if (hasTimer) return;
+  ctx.db.marketActivityTimer.insert({
+    scheduledId: 0n,
+    scheduledAt: ScheduleAt.interval(MARKET_ACTIVITY_TICK_INTERVAL_MICROS),
+  });
+}
+
 function clampDelayMicros(
   seconds: bigint,
   minMicros: bigint,
@@ -1336,27 +1846,31 @@ function clampDelayMicros(
   return micros;
 }
 
-function scheduleTimerAt(ctx: SeedCtx, dueMicros: bigint, target: 'nova' | 'pulse' | 'news'): void {
+type SchedulerTarget = 'cedar' | 'harbor' | 'apex' | 'news';
+
+function scheduleTimerAt(ctx: SeedCtx, dueMicros: bigint, target: SchedulerTarget): void {
   const row = {
     scheduledId: 0n,
     scheduledAt: ScheduleAt.time(dueMicros),
   };
-  if (target === 'nova') ctx.db.aiTraderNovaTimer.insert(row);
-  else if (target === 'pulse') ctx.db.aiTraderPulseTimer.insert(row);
+  if (target === 'cedar') ctx.db.aiTraderNovaTimer.insert(row);
+  else if (target === 'harbor') ctx.db.aiTraderPulseTimer.insert(row);
+  else if (target === 'apex') ctx.db.aiTraderApexTimer.insert(row);
   else ctx.db.aiMarketNewsTimer.insert(row);
 }
 
 function scheduleTimerAfter(
   ctx: SeedCtx,
   delayMicros: bigint,
-  target: 'nova' | 'pulse' | 'news'
+  target: SchedulerTarget
 ): void {
   scheduleTimerAt(ctx, ctx.timestamp.microsSinceUnixEpoch + delayMicros, target);
 }
 
-function hasPendingTimer(ctx: SeedCtx, target: 'nova' | 'pulse' | 'news'): boolean {
-  if (target === 'nova') return [...ctx.db.aiTraderNovaTimer.iter()].length > 0;
-  if (target === 'pulse') return [...ctx.db.aiTraderPulseTimer.iter()].length > 0;
+function hasPendingTimer(ctx: SeedCtx, target: SchedulerTarget): boolean {
+  if (target === 'cedar') return [...ctx.db.aiTraderNovaTimer.iter()].length > 0;
+  if (target === 'harbor') return [...ctx.db.aiTraderPulseTimer.iter()].length > 0;
+  if (target === 'apex') return [...ctx.db.aiTraderApexTimer.iter()].length > 0;
   return [...ctx.db.aiMarketNewsTimer.iter()].length > 0;
 }
 
@@ -1384,11 +1898,14 @@ function setSchedulerState(
 function ensureAiTraderTimersSeeded(ctx: SeedCtx): void {
   if (!AI_TRADER_BOTS_ENABLED || !AI_TRADER_LLM_ENABLED) return;
   if (!getGlobalAiConfig(ctx)) return;
-  if (!hasPendingTimer(ctx, 'nova') && !getSchedulerState(ctx, 'nova_trader')?.paused) {
-    scheduleTimerAfter(ctx, AI_NOVA_INITIAL_DELAY_MICROS, 'nova');
+  if (!hasPendingTimer(ctx, 'cedar') && !getSchedulerState(ctx, 'cedar_trader')?.paused) {
+    scheduleTimerAfter(ctx, AI_CEDAR_INITIAL_DELAY_MICROS, 'cedar');
   }
-  if (!hasPendingTimer(ctx, 'pulse') && !getSchedulerState(ctx, 'pulse_trader')?.paused) {
-    scheduleTimerAfter(ctx, AI_PULSE_INITIAL_DELAY_MICROS, 'pulse');
+  if (!hasPendingTimer(ctx, 'harbor') && !getSchedulerState(ctx, 'harbor_trader')?.paused) {
+    scheduleTimerAfter(ctx, AI_HARBOR_INITIAL_DELAY_MICROS, 'harbor');
+  }
+  if (!hasPendingTimer(ctx, 'apex') && !getSchedulerState(ctx, 'apex_trader')?.paused) {
+    scheduleTimerAfter(ctx, AI_APEX_INITIAL_DELAY_MICROS, 'apex');
   }
 }
 
@@ -1416,8 +1933,9 @@ function requestPromptNewsCheck(ctx: SeedCtx): void {
 }
 
 function tradeActorLabel(ctx: ModuleCtx, trader: PlayerIdentity): string {
-  for (const bot of AI_TRADER_BOTS) {
-    if (botIdentity(bot.identityHex).isEqual(trader)) return bot.name;
+  const fundDefinition = findFundDefinitionByManager(trader);
+  if (fundDefinition) {
+    return publicFundName(fundDefinition.symbol, ctx);
   }
   return 'Retail trader';
 }
@@ -1461,20 +1979,13 @@ function buildAutoNewsContext(ctx: ModuleCtx): string {
     'Stocks:',
     ...stockLines,
     '',
-    'Recent trades (retail + Nova AI + Pulse AI):',
+    'Recent trades (retail + fund managers):',
     ...(tape.length > 0 ? tape : ['(no recent trades)']),
     '',
     'Recent headlines already published:',
     ...(lastNews.length > 0 ? lastNews : ['(none yet)']),
   ];
   return lines.join('\n');
-}
-
-function centsToDollarString(cents: bigint): string {
-  const safe = cents < 0n ? 0n : cents;
-  const dollars = safe / 100n;
-  const remainder = (safe % 100n).toString().padStart(2, '0');
-  return `${dollars}.${remainder}`;
 }
 
 function clampBuyShares(
@@ -1515,6 +2026,149 @@ function recordAiTraderMemory(
     ctx.db.aiTraderMemory.owner.update(row);
   } else {
     ctx.db.aiTraderMemory.insert(row);
+  }
+}
+
+function latestPlanFor(ctx: ModuleCtx, manager: PlayerIdentity, dayIndex: bigint) {
+  return [...ctx.db.managerTradingPlan.manager.filter(manager)]
+    .filter(plan => plan.dayIndex === dayIndex)
+    .sort((left, right) => {
+      if (right.createdAt.microsSinceUnixEpoch > left.createdAt.microsSinceUnixEpoch) return 1;
+      if (right.createdAt.microsSinceUnixEpoch < left.createdAt.microsSinceUnixEpoch) return -1;
+      return 0;
+    })[0];
+}
+
+function clearFuturePlans(ctx: ModuleCtx, keepDayIndex: bigint): void {
+  for (const step of ctx.db.managerTradingPlanStep.iter()) {
+    if (step.dayIndex >= keepDayIndex) ctx.db.managerTradingPlanStep.id.delete(step.id);
+  }
+  for (const plan of ctx.db.managerTradingPlan.iter()) {
+    if (plan.dayIndex >= keepDayIndex) ctx.db.managerTradingPlan.id.delete(plan.id);
+  }
+}
+
+function fallbackPlanForBot(bot: AiTraderBot, dayIndex: bigint): LlmTradingPlan {
+  const symbols = ['NVDA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN'];
+  const maxShares = maxPlanSharesForRisk(bot.personality);
+  const baseSize =
+    bot.personality === 'conservative'
+      ? maxShares / 3n
+      : bot.personality === 'moderate'
+        ? maxShares / 2n
+        : maxShares;
+  const minutes = [575n, 610n, 650n, 700n, 780n, 900n];
+  return {
+    thesis: `${bot.styleLabel} fallback plan for day ${dayIndex.toString()}.`,
+    riskPosture: bot.styleLabel,
+    steps: minutes.map((minute, index) => ({
+      gameMinute: minute,
+      action: index === 4 ? 'sell' : index === 5 ? 'hold' : 'buy',
+      symbol: index === 5 ? '' : symbols[index % symbols.length]!,
+      shares: index === 5 ? 0n : baseSize > 0n ? baseSize : 1n,
+      reasoning: 'Deterministic fallback step.',
+    })),
+  };
+}
+
+function storeTradingPlan(
+  ctx: ModuleCtx,
+  bot: AiTraderBot,
+  dayIndex: bigint,
+  plan: LlmTradingPlan,
+  source: 'llm' | 'rules'
+): void {
+  const owner = botIdentity(bot.identityHex);
+  if (latestPlanFor(ctx, owner, dayIndex)) return;
+  const inserted = ctx.db.managerTradingPlan.insert({
+    id: 0n,
+    manager: owner,
+    fundSymbol: bot.fundSymbol,
+    dayIndex,
+    thesis: plan.thesis,
+    riskPosture: plan.riskPosture,
+    source,
+    createdAt: ctx.timestamp,
+  });
+  const planId = inserted.id;
+  for (const step of plan.steps) {
+    ctx.db.managerTradingPlanStep.insert({
+      id: 0n,
+      planId,
+      manager: owner,
+      fundSymbol: bot.fundSymbol,
+      dayIndex,
+      gameMinute: step.gameMinute,
+      action: step.action,
+      symbol: step.symbol,
+      shares: step.shares,
+      reasoning: step.reasoning,
+      executed: false,
+      executedAt: undefined,
+    });
+  }
+  recordAiTraderMemory(ctx, owner, plan.thesis, 'daily plan ready', source);
+}
+
+function ensureFallbackPlansForOpenDay(ctx: ModuleCtx): void {
+  const day = requireGameDay(ctx);
+  if (!gameClockFor(ctx).tradesAllowed) return;
+  if (getGlobalAiConfig(ctx)) return;
+  for (const bot of AI_TRADER_BOTS) {
+    const owner = botIdentity(bot.identityHex);
+    if (latestPlanFor(ctx, owner, day.dayIndex)) continue;
+    storeTradingPlan(ctx, bot, day.dayIndex, fallbackPlanForBot(bot, day.dayIndex), 'rules');
+  }
+}
+
+type TradingPlanStepRow = {
+  id: bigint;
+  planId: bigint;
+  manager: PlayerIdentity;
+  fundSymbol: string;
+  dayIndex: bigint;
+  gameMinute: bigint;
+  action: string;
+  symbol: string;
+  shares: bigint;
+  reasoning: string;
+  executed: boolean;
+  executedAt?: ModuleCtx['timestamp'];
+};
+
+function executePlanStep(ctx: ModuleCtx, step: TradingPlanStepRow): void {
+  if (step.executed) return;
+  const actionSummary =
+    step.action === 'hold'
+      ? 'hold'
+      : `${step.action} ${step.shares.toString()} ${step.symbol}`;
+  if (step.action === 'buy') {
+    executeBuyForOwner(ctx, step.manager, step.symbol, step.shares, false);
+  } else if (step.action === 'sell') {
+    executeSellForOwner(ctx, step.manager, step.symbol, step.shares, false);
+  }
+  ctx.db.managerTradingPlanStep.id.update({
+    ...step,
+    executed: true,
+    executedAt: ctx.timestamp,
+  });
+  recordAiTraderMemory(ctx, step.manager, step.reasoning, actionSummary, 'llm');
+}
+
+function executeDueTradingPlanSteps(ctx: ModuleCtx): void {
+  const day = requireGameDay(ctx);
+  const clock = gameClockFor(ctx);
+  if (!clock.tradesAllowed) return;
+  ensureFallbackPlansForOpenDay(ctx);
+  const dueSteps = [...ctx.db.managerTradingPlanStep.dayIndex.filter(day.dayIndex)]
+    .filter(step => !step.executed && step.gameMinute <= clock.currentGameMinute)
+    .sort((left, right) => {
+      if (left.gameMinute < right.gameMinute) return -1;
+      if (left.gameMinute > right.gameMinute) return 1;
+      return left.id < right.id ? -1 : 1;
+    });
+  for (const step of dueSteps) {
+    executePlanStep(ctx, step);
   }
 }
 
@@ -1562,6 +2216,7 @@ function buildSingleBotLlmContext(ctx: ModuleCtx, focusBot: AiTraderBot): string
 
   for (const bot of AI_TRADER_BOTS) {
     const owner = botIdentity(bot.identityHex);
+    const publicName = publicFundName(bot.fundSymbol, ctx);
     const memory = ctx.db.aiTraderMemory.owner.find(owner);
     const cashCents = ctx.db.account.owner.find(owner)?.balanceCents ?? 0n;
     const holdings = [...ctx.db.holding.owner.filter(owner)].map(position => {
@@ -1585,7 +2240,7 @@ function buildSingleBotLlmContext(ctx: ModuleCtx, focusBot: AiTraderBot): string
 
     lines.push(
       '',
-      `${bot.name} (${bot.styleLabel}):`,
+      `${publicName} (${bot.styleLabel}):`,
       `Cash: $${centsToDollarString(cashCents)}${canAffordAnyStock ? '' : ' — CANNOT BUY (sell holdings first)'}`,
       `Holdings: ${holdings.length > 0 ? holdings.join(', ') : 'none'}`,
       `Recent trades: ${recentTrades.length > 0 ? recentTrades.join('; ') : 'none'}`,
@@ -1596,25 +2251,62 @@ function buildSingleBotLlmContext(ctx: ModuleCtx, focusBot: AiTraderBot): string
 
   lines.push(
     '',
-    `You are deciding ONLY for ${focusBot.name}. Choose when to trade next independently of the other AI.`
+    `You are deciding ONLY for ${publicFundName(focusBot.fundSymbol, ctx)}. Choose when to trade next independently of the other fund managers.`
   );
   return lines.join('\n');
+}
+
+function buildTradingPlanContext(ctx: ModuleCtx, focusBot: AiTraderBot): string {
+  const base = buildSingleBotLlmContext(ctx, focusBot);
+  const day = requireGameDay(ctx);
+  const clock = gameClockFor(ctx);
+  return [
+    base,
+    '',
+    `Current game day: ${day.dayIndex.toString()}`,
+    `Current in-game time: ${formatGameMinute(clock.currentGameMinute)}`,
+    'Create a full-day plan. The server will execute due steps automatically.',
+  ].join('\n');
 }
 
 function runSingleBotLlmTick(ctx: ProcedureCtx<typeof spacetimedb.schemaType>, bot: AiTraderBot): void {
   if (!AI_TRADER_BOTS_ENABLED || !AI_TRADER_LLM_ENABLED) return;
 
-  const schedulerKey = bot.name === 'Nova AI' ? 'nova_trader' : 'pulse_trader';
+  const schedulerKey =
+    bot.fundSymbol === 'CEDR'
+      ? 'cedar_trader'
+      : bot.fundSymbol === 'HARB'
+        ? 'harbor_trader'
+        : 'apex_trader';
+  const schedulerTarget =
+    bot.fundSymbol === 'CEDR'
+      ? 'cedar'
+      : bot.fundSymbol === 'HARB'
+        ? 'harbor'
+        : 'apex';
   const setup = ctx.withTx(tx => {
     ensureAiTradersSeeded(tx);
+    ensureGameDaySeeded(tx);
+    const day = requireGameDay(tx);
+    const owner = botIdentity(bot.identityHex);
     return {
-      context: buildSingleBotLlmContext(tx, bot),
+      context: buildTradingPlanContext(tx, bot),
       globalConfig: getGlobalAiConfig(tx),
+      dayIndex: day.dayIndex,
+      hasPlan: latestPlanFor(tx, owner, day.dayIndex) != null,
     };
   });
 
+  if (setup.hasPlan) {
+    debugAiTraderLlm(`${bot.name}: plan already exists for day ${setup.dayIndex.toString()}`);
+    return;
+  }
+
   if (!setup.globalConfig) {
-    debugAiTraderLlm(`${bot.name}: no OpenAI config — idle`);
+    ctx.withTx(tx =>
+      storeTradingPlan(tx, bot, setup.dayIndex, fallbackPlanForBot(bot, setup.dayIndex), 'rules')
+    );
+    debugAiTraderLlm(`${bot.name}: no OpenAI config — fallback plan`);
     return;
   }
 
@@ -1627,38 +2319,34 @@ function runSingleBotLlmTick(ctx: ProcedureCtx<typeof spacetimedb.schemaType>, b
   const result = callChat(ctx.http, provider, {
     apiKey: config.apiKey,
     model: config.model,
-    messages: buildSingleTraderLlmMessages(bot.name, bot.styleLabel, setup.context),
+    messages: buildTradingPlanLlmMessages(bot.name, bot.styleLabel, setup.context),
   });
 
   if (!result.ok) {
     const err = formatChatError(result.error);
     debugAiTraderLlm(`${bot.name}: llm failed — ${err}`);
-    ctx.withTx(tx => setSchedulerState(tx, schedulerKey, true, err));
+    ctx.withTx(tx => {
+      setSchedulerState(tx, schedulerKey, false, err);
+      storeTradingPlan(tx, bot, setup.dayIndex, fallbackPlanForBot(bot, setup.dayIndex), 'rules');
+    });
     return;
   }
 
-  const decision = parseSingleTraderLlmResponse(result.response.text, bot.name);
-  if (!decision) {
-    debugAiTraderLlm(`${bot.name}: parse failed — reschedule`);
+  const plan = parseTradingPlanLlmResponse(result.response.text, bot.personality);
+  if (!plan) {
+    debugAiTraderLlm(`${bot.name}: plan parse failed — fallback`);
     ctx.withTx(tx => {
       setSchedulerState(tx, schedulerKey, false, '');
-      scheduleTimerAfter(tx, clampDelayMicros(40n, AI_TRADER_MIN_CHECK_MICROS, AI_TRADER_MAX_CHECK_MICROS), bot.name === 'Nova AI' ? 'nova' : 'pulse');
+      storeTradingPlan(tx, bot, setup.dayIndex, fallbackPlanForBot(bot, setup.dayIndex), 'rules');
     });
     return;
   }
 
   ctx.withTx(tx => {
     setSchedulerState(tx, schedulerKey, false, '');
-    applyLlmTraderDecision(tx, decision);
-    snapshotAllPortfolios(tx);
-    const delay = clampDelayMicros(
-      decision.nextCheckSeconds,
-      AI_TRADER_MIN_CHECK_MICROS,
-      AI_TRADER_MAX_CHECK_MICROS
-    );
-    scheduleTimerAfter(tx, delay, bot.name === 'Nova AI' ? 'nova' : 'pulse');
+    storeTradingPlan(tx, bot, setup.dayIndex, plan, 'llm');
   });
-  debugAiTraderLlm(`${bot.name}: next check in ${decision.nextCheckSeconds.toString()}s`);
+  debugAiTraderLlm(`${bot.name}: daily plan ready`);
 }
 
 function executeBotSellForCash(
@@ -1843,9 +2531,243 @@ function ensureMarketSeeded(ctx: SeedCtx): void {
   }
 }
 
+function managerPortfolioValueCents(ctx: Pick<ModuleCtx, 'db'>, managerIdentityHex: string): bigint {
+  return computePortfolioValueCents(ctx, botIdentity(managerIdentityHex));
+}
+
+function refreshFundPrice(ctx: TimeCtx, symbol: string): void {
+  const existing = ctx.db.fund.symbol.find(symbol);
+  if (!existing) return;
+
+  const currentDay = utcTradingDayIndex(ctx.timestamp.microsSinceUnixEpoch);
+  const navCents = managerPortfolioValueCents(ctx, existing.managerIdentityHex);
+  const priceCents = computeFundSharePriceCents(navCents, existing.totalShares);
+  const dayChanged = existing.tradingDayIndex !== currentDay;
+  const dayOpenPriceCents =
+    existing.tradingDayIndex === 0n || dayChanged
+      ? priceCents
+      : existing.dayOpenPriceCents;
+
+  ctx.db.fund.symbol.update({
+    ...existing,
+    name: publicFundName(symbol, ctx),
+    navCents,
+    previousPriceCents: existing.priceCents,
+    priceCents,
+    dayOpenPriceCents,
+    tradingDayIndex: currentDay,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function refreshAllFundPrices(ctx: TimeCtx): void {
+  for (const row of ctx.db.fund.iter()) {
+    refreshFundPrice(ctx, row.symbol);
+  }
+}
+
+function resetOpenPricesForNewGameDay(ctx: TimeCtx, dayIndex: bigint): void {
+  for (const row of ctx.db.stock.iter()) {
+    ctx.db.stock.symbol.update({
+      ...row,
+      previousPriceCents: row.priceCents,
+      dayOpenPriceCents: row.priceCents,
+      tradingDayIndex: dayIndex,
+      volume: 0n,
+      updatedAt: ctx.timestamp,
+    });
+  }
+  for (const row of ctx.db.fund.iter()) {
+    ctx.db.fund.symbol.update({
+      ...row,
+      previousPriceCents: row.priceCents,
+      dayOpenPriceCents: row.priceCents,
+      tradingDayIndex: dayIndex,
+      updatedAt: ctx.timestamp,
+    });
+  }
+}
+
+function settlePredictionsForDay(ctx: ModuleCtx, dayIndex: bigint): void {
+  const funds = [...ctx.db.fund.iter()];
+  if (funds.length === 0) return;
+  const ranking = rankFundsForPrediction(funds);
+  for (const prediction of ctx.db.dailyPrediction.dayIndex.filter(dayIndex)) {
+    if (prediction.settledAt != null) continue;
+    const settlement = settlePrediction(
+      prediction.bestFundSymbol,
+      prediction.worstFundSymbol,
+      ranking.bestFundSymbol,
+      ranking.worstFundSymbol
+    );
+    const account = ctx.db.account.owner.find(prediction.owner);
+    if (account && settlement.bonusCents > 0n) {
+      const balanceCents =
+        account.balanceCents > MAX_U64 - settlement.bonusCents
+          ? MAX_U64
+          : account.balanceCents + settlement.bonusCents;
+      ctx.db.account.owner.update({
+        ...account,
+        balanceCents,
+        updatedAt: ctx.timestamp,
+      });
+    }
+    ctx.db.dailyPrediction.id.update({
+      ...prediction,
+      settledAt: ctx.timestamp,
+      actualBestFundSymbol: settlement.bestFundSymbol,
+      actualWorstFundSymbol: settlement.worstFundSymbol,
+      bestCorrect: settlement.bestCorrect,
+      worstCorrect: settlement.worstCorrect,
+      bonusCents: settlement.bonusCents,
+    });
+    recordPortfolioSnapshot(ctx, prediction.owner);
+  }
+}
+
+function applyKeyArticleShock(
+  ctx: ModuleCtx,
+  stockRow: StockRow,
+  sentiment: 'bullish' | 'bearish',
+  shockBps: bigint
+): StockRow {
+  const previousPriceCents = stockRow.priceCents;
+  const factor =
+    sentiment === 'bullish' ? 10_000n + shockBps : 10_000n - shockBps;
+  let priceCents = (stockRow.priceCents * factor) / 10_000n;
+  if (priceCents < 100n) priceCents = 100n;
+  const updated = {
+    ...stockRow,
+    previousPriceCents,
+    priceCents,
+    updatedAt: ctx.timestamp,
+  };
+  ctx.db.stock.symbol.update(updated);
+  return updated;
+}
+
+function maybeCreateKeyArticleForDay(ctx: ModuleCtx, dayIndex: bigint): void {
+  if ([...ctx.db.keyArticle.dayIndex.filter(dayIndex)].length > 0) return;
+  const seed = actionSeed(ctx, 'KEY_ARTICLE', dayIndex, 404n);
+  if (seed % KEY_ARTICLE_CHANCE_DIVISOR !== 0n) return;
+  const stocks = [...ctx.db.stock.iter()].sort((left, right) =>
+    left.symbol.localeCompare(right.symbol)
+  );
+  if (stocks.length === 0) return;
+  const stockRow = stocks[Number((seed / 7n) % BigInt(stocks.length))]!;
+  const sentiment = seed % 2n === 0n ? 'bullish' : 'bearish';
+  const shockBps = deterministicRange(
+    seed / 11n,
+    KEY_ARTICLE_MIN_SHOCK_BPS,
+    KEY_ARTICLE_MAX_SHOCK_BPS
+  );
+  const updated = applyKeyArticleShock(ctx, stockRow, sentiment, shockBps);
+  const direction = sentiment === 'bullish' ? 'surges' : 'slides';
+  const headline = `Key Article: ${updated.symbol} ${direction} on major report`;
+  const body =
+    sentiment === 'bullish'
+      ? `${updated.symbol} is rallying after a high-impact article shifted sentiment sharply positive. Fund managers are repricing exposure after the report.`
+      : `${updated.symbol} is under pressure after a high-impact article shifted sentiment sharply negative. Fund managers are reassessing risk after the report.`;
+  ctx.db.keyArticle.insert({
+    id: 0n,
+    dayIndex,
+    symbol: updated.symbol,
+    sentiment,
+    headline,
+    body,
+    shockBps: sentiment === 'bullish' ? shockBps : -shockBps,
+    applied: true,
+    createdAt: ctx.timestamp,
+  });
+  insertMarketNewsRow(ctx, headline, body, updated.symbol, true);
+  refreshAllFundPrices(ctx);
+}
+
+function startNextGameDay(ctx: ModuleCtx): void {
+  const existing = requireGameDay(ctx);
+  settlePredictionsForDay(ctx, existing.dayIndex);
+  const nextDayIndex = existing.dayIndex + 1n;
+  ctx.db.gameDay.id.update({
+    ...existing,
+    dayIndex: nextDayIndex,
+    openedAtMicros: ctx.timestamp.microsSinceUnixEpoch,
+    phase: 'open',
+    currentGameMinute: GAME_DAY_OPEN_MINUTE,
+    updatedAt: ctx.timestamp,
+  });
+  resetOpenPricesForNewGameDay(ctx, nextDayIndex);
+  clearFuturePlans(ctx, nextDayIndex);
+  maybeCreateKeyArticleForDay(ctx, nextDayIndex);
+  refreshAllFundPrices(ctx);
+  snapshotAllPortfolios(ctx);
+}
+
+function updateGameDayClock(ctx: ModuleCtx): void {
+  ensureGameDaySeeded(ctx);
+  const day = requireGameDay(ctx);
+  if (shouldRollToNextDay(day.openedAtMicros, ctx.timestamp.microsSinceUnixEpoch)) {
+    startNextGameDay(ctx);
+    return;
+  }
+  const clock = deriveGameClockState(day.openedAtMicros, ctx.timestamp.microsSinceUnixEpoch);
+  if (day.phase !== clock.phase || day.currentGameMinute !== clock.currentGameMinute) {
+    ctx.db.gameDay.id.update({
+      ...day,
+      phase: clock.phase,
+      currentGameMinute: clock.currentGameMinute,
+      updatedAt: ctx.timestamp,
+    });
+  }
+}
+
+function ensureFundsSeeded(ctx: TimeCtx): void {
+  ensureAiTradersSeeded(ctx);
+  ensureScriptedFundManagersSeeded(ctx);
+
+  const currentDay = utcTradingDayIndex(ctx.timestamp.microsSinceUnixEpoch);
+  for (const definition of allFundDefinitions()) {
+    const existing = ctx.db.fund.symbol.find(definition.symbol);
+    if (!existing) {
+      const navCents = managerPortfolioValueCents(ctx, definition.managerIdentityHex);
+      const priceCents = computeFundSharePriceCents(
+        navCents > 0n ? navCents : FUND_STARTING_NAV_CENTS * FUND_TOTAL_SHARES,
+        FUND_TOTAL_SHARES
+      );
+      ctx.db.fund.insert({
+        symbol: definition.symbol,
+        name: publicFundName(definition.symbol, ctx),
+        managerIdentityHex: definition.managerIdentityHex,
+        kind: definition.kind,
+        riskProfile: definition.riskProfile,
+        totalShares: FUND_TOTAL_SHARES,
+        availableShares: FUND_PUBLIC_FLOAT_SHARES,
+        navCents,
+        priceCents,
+        previousPriceCents: priceCents,
+        dayOpenPriceCents: priceCents,
+        tradingDayIndex: currentDay,
+        updatedAt: ctx.timestamp,
+      });
+    } else {
+      refreshFundPrice(ctx, existing.symbol);
+    }
+  }
+}
+
+function ensureGameDayContentSeeded(ctx: ModuleCtx): void {
+  ensureGameDaySeeded(ctx);
+  const day = requireGameDay(ctx);
+  maybeCreateKeyArticleForDay(ctx, day.dayIndex);
+}
+
 export const init = spacetimedb.init(ctx => {
+  ensureGameDaySeeded(ctx);
   ensureMarketSeeded(ctx);
   ensureAiTradersSeeded(ctx);
+  ensureFundsSeeded(ctx);
+  ensureGameDayContentSeeded(ctx);
+  ensureGameClockTimerScheduled(ctx);
+  ensureMarketActivityTimerScheduled(ctx);
   ensureMarketTickScheduled(ctx);
   ensureAiTraderTimersSeeded(ctx);
   ensureAutoNewsTimerSeeded(ctx);
@@ -1854,15 +2776,38 @@ export const init = spacetimedb.init(ctx => {
 export const market_tick = spacetimedb.reducer(
   { timer: tickTimer.rowType },
   (ctx, _args) => {
+    updateGameDayClock(ctx);
     ensureAiTraderTimersSeeded(ctx);
     ensureAutoNewsTimerSeeded(ctx);
     rollAllStockTradingDays(ctx);
+    refreshAllFundPrices(ctx);
+    snapshotAllPortfolios(ctx);
+  }
+);
+
+export const game_clock_tick = spacetimedb.reducer(
+  { timer: gameClockTimer.rowType },
+  (ctx, _args) => {
+    updateGameDayClock(ctx);
+  }
+);
+
+export const market_activity_tick = spacetimedb.reducer(
+  { timer: marketActivityTimer.rowType },
+  (ctx, _args) => {
+    updateGameDayClock(ctx);
+    if (!tradesAreAllowed(ctx)) return;
+    ensureAiTraderTimersSeeded(ctx);
+    executeDueTradingPlanSteps(ctx);
     if (AUTOMATIC_MARKET_MOVEMENT) {
       runInstitutionalMarketEvent(ctx);
     } else if (AI_TRADER_BOTS_ENABLED && !AI_TRADER_LLM_ENABLED) {
       ensureAiTradersSeeded(ctx);
       runAiTraderCompetition(ctx);
     }
+    runInstitutionalMarketEvent(ctx);
+    runScriptedFundCompetition(ctx);
+    refreshAllFundPrices(ctx);
     snapshotAllPortfolios(ctx);
   }
 );
@@ -1881,6 +2826,15 @@ export const ai_trader_pulse_tick = spacetimedb.procedure(
   t.unit(),
   (ctx, _args) => {
     runSingleBotLlmTick(ctx, AI_TRADER_BOTS[1]!);
+    return {};
+  }
+);
+
+export const ai_trader_apex_tick = spacetimedb.procedure(
+  { timer: aiTraderApexTimer.rowType },
+  t.unit(),
+  (ctx, _args) => {
+    runSingleBotLlmTick(ctx, AI_TRADER_BOTS[2]!);
     return {};
   }
 );
@@ -1956,8 +2910,13 @@ export const ai_market_news_tick = spacetimedb.procedure(
 );
 
 export const onConnect = spacetimedb.clientConnected(ctx => {
+  ensureGameDaySeeded(ctx);
   ensureMarketSeeded(ctx);
   ensureAiTradersSeeded(ctx);
+  ensureFundsSeeded(ctx);
+  ensureGameDayContentSeeded(ctx);
+  ensureGameClockTimerScheduled(ctx);
+  ensureMarketActivityTimerScheduled(ctx);
   ensureMarketTickScheduled(ctx);
   ensureAiTraderTimersSeeded(ctx);
   ensureAutoNewsTimerSeeded(ctx);
@@ -2018,11 +2977,60 @@ export const ai_news_status = spacetimedb.view(
   }
 );
 
+export const market_clock = spacetimedb.anonymousView(
+  { name: 'market_clock', public: true },
+  t.array(marketClockRow),
+  ctx => {
+    const day = ctx.db.gameDay.id.find(GAME_DAY_STATE_ID);
+    const openedAt = day?.openedAtMicros ?? 0n;
+    const clock = deriveGameClockState(
+      openedAt,
+      day?.updatedAt.microsSinceUnixEpoch ?? 0n
+    );
+    const dayIndex = day?.dayIndex ?? 1n;
+    const currentGameMinute = day?.currentGameMinute ?? clock.currentGameMinute;
+    return [
+      {
+        dayIndex,
+        phase: day?.phase ?? clock.phase,
+        currentGameMinute,
+        currentGameTimeLabel: formatGameMinute(currentGameMinute),
+        secondsUntilClose: clock.secondsUntilClose,
+        secondsUntilNextDay: clock.secondsUntilNextDay,
+        tradesAllowed: clock.tradesAllowed,
+        predictionsAllowed: clock.predictionsAllowed,
+      },
+    ];
+  }
+);
+
 export const market_stocks = spacetimedb.anonymousView(
   { name: 'market_stocks', public: true },
   t.array(stock.rowType),
   ctx =>
     [...ctx.db.stock.iter()].sort((left, right) => left.symbol.localeCompare(right.symbol))
+);
+
+export const market_funds = spacetimedb.anonymousView(
+  { name: 'market_funds', public: true },
+  t.array(fundMarketRow),
+  ctx =>
+    [...ctx.db.fund.iter()]
+      .sort((left, right) => left.symbol.localeCompare(right.symbol))
+      .map(row => ({
+        symbol: row.symbol,
+        name: row.name,
+        kind: row.kind,
+        riskProfile: row.riskProfile,
+        totalShares: row.totalShares,
+        availableShares: row.availableShares,
+        navCents: row.navCents,
+        priceCents: row.priceCents,
+        previousPriceCents: row.previousPriceCents,
+        dayOpenPriceCents: row.dayOpenPriceCents,
+        tradingDayIndex: row.tradingDayIndex,
+        updatedAt: row.updatedAt,
+      }))
 );
 
 export const my_holdings = spacetimedb.view(
@@ -2031,10 +3039,70 @@ export const my_holdings = spacetimedb.view(
   ctx => [...ctx.db.holding.owner.filter(ctx.sender)]
 );
 
+export const my_fund_holdings = spacetimedb.view(
+  { name: 'my_fund_holdings', public: true },
+  t.array(fundHolding.rowType),
+  ctx => [...ctx.db.fundHolding.owner.filter(ctx.sender)]
+);
+
 export const my_trades = spacetimedb.view(
   { name: 'my_trades', public: true },
   t.array(tradeLedger.rowType),
   ctx => [...ctx.db.tradeLedger.owner.filter(ctx.sender)]
+);
+
+export const my_fund_trades = spacetimedb.view(
+  { name: 'my_fund_trades', public: true },
+  t.array(fundTradeLedger.rowType),
+  ctx => [...ctx.db.fundTradeLedger.owner.filter(ctx.sender)]
+);
+
+export const my_daily_prediction = spacetimedb.view(
+  { name: 'my_daily_prediction', public: true },
+  t.array(dailyPredictionViewRow),
+  ctx => {
+    const day = ctx.db.gameDay.id.find(GAME_DAY_STATE_ID);
+    const dayIndex = day?.dayIndex ?? 1n;
+    return [...ctx.db.dailyPrediction.owner.filter(ctx.sender)]
+      .filter(row => row.dayIndex === dayIndex)
+      .map(row => ({
+        dayIndex: row.dayIndex,
+        bestFundSymbol: row.bestFundSymbol,
+        worstFundSymbol: row.worstFundSymbol,
+        submittedAt: row.submittedAt,
+        settledAt: row.settledAt,
+        actualBestFundSymbol: row.actualBestFundSymbol,
+        actualWorstFundSymbol: row.actualWorstFundSymbol,
+        bestCorrect: row.bestCorrect,
+        worstCorrect: row.worstCorrect,
+        bonusCents: row.bonusCents,
+      }));
+  }
+);
+
+export const prediction_results = spacetimedb.view(
+  { name: 'prediction_results', public: true },
+  t.array(dailyPredictionViewRow),
+  ctx =>
+    [...ctx.db.dailyPrediction.owner.filter(ctx.sender)]
+      .sort((left, right) => {
+        if (right.dayIndex > left.dayIndex) return 1;
+        if (right.dayIndex < left.dayIndex) return -1;
+        return 0;
+      })
+      .slice(0, 5)
+      .map(row => ({
+        dayIndex: row.dayIndex,
+        bestFundSymbol: row.bestFundSymbol,
+        worstFundSymbol: row.worstFundSymbol,
+        submittedAt: row.submittedAt,
+        settledAt: row.settledAt,
+        actualBestFundSymbol: row.actualBestFundSymbol,
+        actualWorstFundSymbol: row.actualWorstFundSymbol,
+        bestCorrect: row.bestCorrect,
+        worstCorrect: row.worstCorrect,
+        bonusCents: row.bonusCents,
+      }))
 );
 
 export const my_portfolio_history = spacetimedb.view(
@@ -2065,6 +3133,12 @@ function portfolioValueForOwner(
     const stockRow = db.stock.symbol.find(position.symbol);
     if (!stockRow) continue;
     holdingsValue += position.shares * stockRow.priceCents;
+  }
+
+  for (const position of db.fundHolding.owner.filter(owner)) {
+    const fundRow = db.fund.symbol.find(position.symbol);
+    if (!fundRow) continue;
+    holdingsValue += position.shares * fundRow.priceCents;
   }
 
   const total = playerAccount.balanceCents + holdingsValue;
@@ -2098,7 +3172,7 @@ export const ai_trader_minds = spacetimedb.view(
 
       return {
         traderName: player?.name ?? bot.name,
-        traderStyle: bot.styleLabel,
+        traderStyle: 'Fund manager',
         rank: rankIndex >= 0 ? BigInt(rankIndex + 1) : 0n,
         portfolioValueCents: portfolioValue,
         cashCents,
@@ -2132,8 +3206,8 @@ export const ai_trader_log = spacetimedb.view(
         );
         return {
           id: trade.id,
-          traderName: player?.name ?? bot?.name ?? 'AI Trader',
-          traderStyle: bot?.styleLabel ?? 'AI trader',
+          traderName: player?.name ?? bot?.name ?? 'Fund manager',
+          traderStyle: 'Fund manager',
           symbol: trade.symbol,
           side: trade.side,
           shares: trade.shares,
@@ -2157,6 +3231,13 @@ export const leaderboard = spacetimedb.view(
         const stockRow = ctx.db.stock.symbol.find(position.symbol);
         if (!stockRow) continue;
         const positionValue = position.shares * stockRow.priceCents;
+        holdingsValue += positionValue;
+      }
+
+      for (const position of ctx.db.fundHolding.owner.filter(player.owner)) {
+        const fundRow = ctx.db.fund.symbol.find(position.symbol);
+        if (!fundRow) continue;
+        const positionValue = position.shares * fundRow.priceCents;
         holdingsValue += positionValue;
       }
 
@@ -2269,8 +3350,9 @@ export const set_global_ai_config = spacetimedb.reducer(
     }
 
     resumeAutoNewsScheduler(ctx);
-    setSchedulerState(ctx, 'nova_trader', false, '');
-    setSchedulerState(ctx, 'pulse_trader', false, '');
+    setSchedulerState(ctx, 'cedar_trader', false, '');
+    setSchedulerState(ctx, 'harbor_trader', false, '');
+    setSchedulerState(ctx, 'apex_trader', false, '');
     ensureAiTraderTimersSeeded(ctx);
   }
 );
@@ -2358,7 +3440,15 @@ export const test_global_ai_connection = spacetimedb.procedure(
 );
 
 export const seed_market = spacetimedb.reducer({}, ctx => {
+  ensureGameDaySeeded(ctx);
   ensureMarketSeeded(ctx);
+  ensureFundsSeeded(ctx);
+  ensureGameDayContentSeeded(ctx);
+  ensureGameClockTimerScheduled(ctx);
+  ensureMarketActivityTimerScheduled(ctx);
+  ensureMarketTickScheduled(ctx);
+  ensureAiTraderTimersSeeded(ctx);
+  ensureAutoNewsTimerSeeded(ctx);
 });
 
 export const set_name = spacetimedb.reducer(
@@ -2404,6 +3494,56 @@ export const sell_stock = spacetimedb.reducer(
   { symbol: t.string(), shares: t.u64() },
   (ctx, { symbol, shares }) => {
     executeSellForOwner(ctx, ctx.sender, symbol, shares, true);
+  }
+);
+
+export const buy_fund = spacetimedb.reducer(
+  { symbol: t.string(), shares: t.u64() },
+  (ctx, { symbol, shares }) => {
+    executeBuyFundForOwner(ctx, ctx.sender, symbol, shares, true);
+  }
+);
+
+export const sell_fund = spacetimedb.reducer(
+  { symbol: t.string(), shares: t.u64() },
+  (ctx, { symbol, shares }) => {
+    executeSellFundForOwner(ctx, ctx.sender, symbol, shares, true);
+  }
+);
+
+export const submit_prediction = spacetimedb.reducer(
+  { bestFundSymbol: t.string(), worstFundSymbol: t.string() },
+  (ctx, { bestFundSymbol, worstFundSymbol }) => {
+    requireAccount(ctx);
+    updateGameDayClock(ctx);
+    const clock = gameClockFor(ctx);
+    if (!clock.predictionsAllowed) {
+      senderError('Prediction window is closed for this trading day');
+    }
+    const day = requireGameDay(ctx);
+    const best = requireFund(ctx, bestFundSymbol);
+    const worst = requireFund(ctx, worstFundSymbol);
+    if (best.symbol === worst.symbol) {
+      senderError('Best and worst fund predictions must be different');
+    }
+    const existing = [...ctx.db.dailyPrediction.owner.filter(ctx.sender)].find(
+      row => row.dayIndex === day.dayIndex
+    );
+    if (existing) senderError('Prediction already submitted for this trading day');
+    ctx.db.dailyPrediction.insert({
+      id: 0n,
+      owner: ctx.sender,
+      dayIndex: day.dayIndex,
+      bestFundSymbol: best.symbol,
+      worstFundSymbol: worst.symbol,
+      submittedAt: ctx.timestamp,
+      settledAt: undefined,
+      actualBestFundSymbol: undefined,
+      actualWorstFundSymbol: undefined,
+      bestCorrect: false,
+      worstCorrect: false,
+      bonusCents: 0n,
+    });
   }
 );
 

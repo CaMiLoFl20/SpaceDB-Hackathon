@@ -30,8 +30,8 @@ export function buildSingleTraderLlmMessages(
     {
       role: 'system',
       content: [
-        `You are ${botName}, a competing AI trader (${styleLabel}) in a live stock simulator.`,
-        'Goal: maximize portfolio value and beat the other AI (Nova AI or Pulse AI) plus all humans.',
+        `You are ${botName}, a competing fund manager (${styleLabel}) in a live stock simulator.`,
+        'Goal: maximize your fund portfolio value and beat the other public funds plus all humans.',
         'Trade only when you see an opportunity — you may hold and check again later.',
         'If cash cannot afford 1 share, sell holdings first.',
         'Respond with JSON only:',

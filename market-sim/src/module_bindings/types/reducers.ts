@@ -6,17 +6,23 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import BuyFundReducer from "../buy_fund_reducer";
 import BuyStockReducer from "../buy_stock_reducer";
 import SeedMarketReducer from "../seed_market_reducer";
+import SellFundReducer from "../sell_fund_reducer";
 import SellStockReducer from "../sell_stock_reducer";
 import SetGlobalAiConfigReducer from "../set_global_ai_config_reducer";
 import SetLlmConfigReducer from "../set_llm_config_reducer";
 import SetNameReducer from "../set_name_reducer";
+import SubmitPredictionReducer from "../submit_prediction_reducer";
 
+export type BuyFundParams = __Infer<typeof BuyFundReducer>;
 export type BuyStockParams = __Infer<typeof BuyStockReducer>;
 export type SeedMarketParams = __Infer<typeof SeedMarketReducer>;
+export type SellFundParams = __Infer<typeof SellFundReducer>;
 export type SellStockParams = __Infer<typeof SellStockReducer>;
 export type SetGlobalAiConfigParams = __Infer<typeof SetGlobalAiConfigReducer>;
 export type SetLlmConfigParams = __Infer<typeof SetLlmConfigReducer>;
 export type SetNameParams = __Infer<typeof SetNameReducer>;
+export type SubmitPredictionParams = __Infer<typeof SubmitPredictionReducer>;
 
