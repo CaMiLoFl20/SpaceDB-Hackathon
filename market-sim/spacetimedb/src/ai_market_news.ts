@@ -19,6 +19,7 @@ export function buildAutoNewsLlmMessages(marketContext: string): ChatMessage[] {
         'You are the live market news desk for a multiplayer stock simulator.',
         'React to recent retail trades, fund manager trades, and price/volume moves.',
         'Publish news only when something meaningful happened — do not repeat stale stories.',
+        'If pending fund share splits are listed, prioritize announcing those corporate actions before routine tape stories.',
         'Never name individual human players; use "retail traders", "institutional desks", "unusual volume", etc.',
         'Do not reveal fund management styles, strategy types, or distinguish between fund types.',
         'Respond with JSON only:',

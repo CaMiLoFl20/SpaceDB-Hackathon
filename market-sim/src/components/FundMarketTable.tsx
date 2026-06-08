@@ -23,7 +23,8 @@ export function FundMarketTable({
   if (funds.length === 0) return <p className="muted">No funds listed yet.</p>;
 
   return (
-    <table className="data-table">
+    <div className="table-scroll">
+      <table className="data-table">
       <thead>
         <tr>
           <th align="left">Fund</th>
@@ -55,5 +56,6 @@ export function FundMarketTable({
         })}
       </tbody>
     </table>
+    </div>
   );
 }

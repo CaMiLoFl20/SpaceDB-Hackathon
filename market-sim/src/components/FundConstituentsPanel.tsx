@@ -44,7 +44,8 @@ export function FundConstituentsPanel({
       ) : visible.length === 0 ? (
         <p className="muted">{activeFund.name} has not disclosed active stock positions yet.</p>
       ) : (
-        <table className="data-table compact-table">
+        <div className="table-scroll">
+          <table className="data-table compact-table">
           <thead>
             <tr>
               <th align="left">Stock</th>
@@ -77,6 +78,7 @@ export function FundConstituentsPanel({
             })}
           </tbody>
         </table>
+        </div>
       )}
     </article>
   );
