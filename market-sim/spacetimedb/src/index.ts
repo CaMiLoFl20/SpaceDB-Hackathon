@@ -13,14 +13,16 @@ import {
 } from './ai_market_news';
 import {
   affordableShareCount,
-  buildFundSplitAnnouncementMessages,
+  buildSplitAnnouncementMessages,
   MIN_AFFORDABLE_SHARES,
-  planFundSplit,
+  planShareSplit,
   projectedPriceAfterSplit,
-  shouldScheduleFundSplit,
-  FUND_SPLIT_LEAD_MICROS,
-  templateFundSplitAnnouncement,
-} from './fund_split';
+  shouldScheduleShareSplit,
+  splitCompletionHeadline,
+  SPLIT_LEAD_MICROS,
+  templateSplitAnnouncement,
+  type SplitInstrumentKind,
+} from './share_split';
 import {
   buildSingleTraderLlmMessages,
   parseSingleTraderLlmResponse,
@@ -327,6 +329,16 @@ const fundSplitPendingRow = {
   createdAt: t.timestamp(),
 };
 
+const stockSplitPendingRow = {
+  id: t.u64().primaryKey().autoInc(),
+  stockSymbol: t.string().unique(),
+  stockName: t.string(),
+  splitRatio: t.u64(),
+  executeAtMicros: t.i64(),
+  announced: t.bool(),
+  createdAt: t.timestamp(),
+};
+
 const playerDirectoryRow = {
   owner: t.identity().primaryKey(),
   name: t.string().index('btree'),
@@ -562,6 +574,7 @@ const tradeLedger = table({ name: 'trade_ledger' }, tradeLedgerRow);
 const recentTrade = table({ name: 'recent_trade', public: true }, recentTradeRow);
 const marketNews = table({ name: 'market_news', public: true }, marketNewsRow);
 const fundSplitPending = table({ name: 'fund_split_pending', public: true }, fundSplitPendingRow);
+const stockSplitPending = table({ name: 'stock_split_pending', public: true }, stockSplitPendingRow);
 const playerDirectory = table(
   { name: 'player_directory', public: true },
   playerDirectoryRow
@@ -610,6 +623,7 @@ const spacetimedb = schema({
   recentTrade,
   marketNews,
   fundSplitPending,
+  stockSplitPending,
   playerDirectory,
   portfolioSnapshot,
 });
@@ -2266,19 +2280,62 @@ function findPendingFundSplit(ctx: Pick<ModuleCtx, 'db'>, fundSymbol: string) {
   return [...ctx.db.fundSplitPending.iter()].find(row => row.fundSymbol === fundSymbol);
 }
 
-type FundSplitPending = {
+function findPendingStockSplit(ctx: Pick<ModuleCtx, 'db'>, stockSymbol: string) {
+  return [...ctx.db.stockSplitPending.iter()].find(row => row.stockSymbol === stockSymbol);
+}
+
+type PendingSplit = {
+  kind: SplitInstrumentKind;
   id: bigint;
-  fundSymbol: string;
-  fundName: string;
+  symbol: string;
+  displayName: string;
   splitRatio: bigint;
   executeAtMicros: bigint;
   announced: boolean;
 };
 
+function findNextUnannouncedSplit(ctx: Pick<ModuleCtx, 'db'>): PendingSplit | undefined {
+  const fund = [...ctx.db.fundSplitPending.iter()].find(row => !row.announced);
+  if (fund) {
+    return {
+      kind: 'fund',
+      id: fund.id,
+      symbol: fund.fundSymbol,
+      displayName: fund.fundName,
+      splitRatio: fund.splitRatio,
+      executeAtMicros: fund.executeAtMicros,
+      announced: fund.announced,
+    };
+  }
+  const stock = [...ctx.db.stockSplitPending.iter()].find(row => !row.announced);
+  if (stock) {
+    return {
+      kind: 'stock',
+      id: stock.id,
+      symbol: stock.stockSymbol,
+      displayName: stock.stockName,
+      splitRatio: stock.splitRatio,
+      executeAtMicros: stock.executeAtMicros,
+      announced: stock.announced,
+    };
+  }
+  return undefined;
+}
+
 function countAffordableFunds(ctx: Pick<ModuleCtx, 'db'>): number {
   let count = 0;
   for (const fundRow of ctx.db.fund.iter()) {
     if (affordableShareCount(STARTING_BALANCE_CENTS, fundRow.priceCents) >= MIN_AFFORDABLE_SHARES) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function countAffordableStocks(ctx: Pick<ModuleCtx, 'db'>): number {
+  let count = 0;
+  for (const stockRow of ctx.db.stock.iter()) {
+    if (affordableShareCount(STARTING_BALANCE_CENTS, stockRow.priceCents) >= MIN_AFFORDABLE_SHARES) {
       count += 1;
     }
   }
@@ -2291,17 +2348,24 @@ function scaleSplitPrice(price: bigint, ratio: bigint): bigint {
   return scaled > 0n ? scaled : 1n;
 }
 
-function markFundSplitAnnounced(ctx: ModuleCtx, pendingId: bigint): void {
-  const row = ctx.db.fundSplitPending.id.find(pendingId);
+function markSplitAnnounced(ctx: ModuleCtx, pending: PendingSplit): void {
+  if (pending.kind === 'fund') {
+    const row = ctx.db.fundSplitPending.id.find(pending.id);
+    if (!row) return;
+    ctx.db.fundSplitPending.id.update({ ...row, announced: true });
+    return;
+  }
+  const row = ctx.db.stockSplitPending.id.find(pending.id);
   if (!row) return;
-  ctx.db.fundSplitPending.id.update({
-    ...row,
-    announced: true,
-  });
+  ctx.db.stockSplitPending.id.update({ ...row, announced: true });
 }
 
-function executeFundShareSplit(ctx: ModuleCtx, pending: FundSplitPending): void {
-  const fundRow = ctx.db.fund.symbol.find(pending.fundSymbol);
+function splitNewsSymbol(kind: SplitInstrumentKind, symbol: string): string | undefined {
+  return kind === 'stock' ? symbol : undefined;
+}
+
+function executeFundShareSplit(ctx: ModuleCtx, pending: PendingSplit): void {
+  const fundRow = ctx.db.fund.symbol.find(pending.symbol);
   if (!fundRow) {
     ctx.db.fundSplitPending.id.delete(pending.id);
     return;
@@ -2343,31 +2407,95 @@ function executeFundShareSplit(ctx: ModuleCtx, pending: FundSplitPending): void 
   });
 
   ctx.db.fundSplitPending.id.delete(pending.id);
-  insertMarketNewsRow(
-    ctx,
-    `${fundRow.name} (${fundRow.symbol}) completes ${ratio.toString()}-for-1 share split`,
-    `The split is now effective at $${centsToDollarString(newPriceCents)} per share. All shareholders received ${ratio.toString()} shares for every share held; portfolio value is unchanged.`,
-    undefined,
-    true
-  );
+  const copy = splitCompletionHeadline({
+    kind: 'fund',
+    symbol: fundRow.symbol,
+    displayName: fundRow.name,
+    splitRatio: ratio,
+    newPriceCents,
+  });
+  insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true);
   snapshotAllPortfolios(ctx);
 }
 
-function announcePendingFundSplitTemplate(ctx: ModuleCtx, pending: FundSplitPending): void {
-  const fundRow = ctx.db.fund.symbol.find(pending.fundSymbol);
-  if (!fundRow) {
-    ctx.db.fundSplitPending.id.delete(pending.id);
+function executeStockShareSplit(ctx: ModuleCtx, pending: PendingSplit): void {
+  const stockRow = ctx.db.stock.symbol.find(pending.symbol);
+  if (!stockRow) {
+    ctx.db.stockSplitPending.id.delete(pending.id);
     return;
   }
 
-  const copy = templateFundSplitAnnouncement({
-    fundSymbol: pending.fundSymbol,
-    fundName: pending.fundName,
-    splitRatio: pending.splitRatio,
-    projectedPriceCents: projectedPriceAfterSplit(fundRow.priceCents, pending.splitRatio),
+  const ratio = pending.splitRatio;
+  if (ratio <= 1n) {
+    ctx.db.stockSplitPending.id.delete(pending.id);
+    return;
+  }
+
+  for (const holding of ctx.db.holding.iter()) {
+    if (holding.symbol !== stockRow.symbol) continue;
+    if (holding.shares > MAX_U64 / ratio) continue;
+    ctx.db.holding.id.update({
+      ...holding,
+      shares: holding.shares * ratio,
+      updatedAt: ctx.timestamp,
+    });
+  }
+
+  const newPriceCents = scaleSplitPrice(stockRow.priceCents, ratio);
+  ctx.db.stock.symbol.update({
+    ...stockRow,
+    priceCents: newPriceCents,
+    previousPriceCents: scaleSplitPrice(stockRow.previousPriceCents, ratio),
+    dayOpenPriceCents: scaleSplitPrice(stockRow.dayOpenPriceCents, ratio),
+    updatedAt: ctx.timestamp,
   });
-  insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true);
-  markFundSplitAnnounced(ctx, pending.id);
+
+  ctx.db.stockSplitPending.id.delete(pending.id);
+  refreshAllFundPrices(ctx);
+  const copy = splitCompletionHeadline({
+    kind: 'stock',
+    symbol: stockRow.symbol,
+    displayName: stockRow.name,
+    splitRatio: ratio,
+    newPriceCents,
+  });
+  insertMarketNewsRow(ctx, copy.headline, copy.body, stockRow.symbol, true);
+  snapshotAllPortfolios(ctx);
+}
+
+function announcePendingSplitTemplate(ctx: ModuleCtx, pending: PendingSplit): void {
+  if (pending.kind === 'fund') {
+    const fundRow = ctx.db.fund.symbol.find(pending.symbol);
+    if (!fundRow) {
+      ctx.db.fundSplitPending.id.delete(pending.id);
+      return;
+    }
+    const copy = templateSplitAnnouncement({
+      kind: 'fund',
+      symbol: pending.symbol,
+      displayName: pending.displayName,
+      splitRatio: pending.splitRatio,
+      projectedPriceCents: projectedPriceAfterSplit(fundRow.priceCents, pending.splitRatio),
+    });
+    insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true);
+    markSplitAnnounced(ctx, pending);
+    return;
+  }
+
+  const stockRow = ctx.db.stock.symbol.find(pending.symbol);
+  if (!stockRow) {
+    ctx.db.stockSplitPending.id.delete(pending.id);
+    return;
+  }
+  const copy = templateSplitAnnouncement({
+    kind: 'stock',
+    symbol: pending.symbol,
+    displayName: pending.displayName,
+    splitRatio: pending.splitRatio,
+    projectedPriceCents: projectedPriceAfterSplit(stockRow.priceCents, pending.splitRatio),
+  });
+  insertMarketNewsRow(ctx, copy.headline, copy.body, stockRow.symbol, true);
+  markSplitAnnounced(ctx, pending);
 }
 
 function scheduleFundSplitsIfNeeded(ctx: ModuleCtx): void {
@@ -2382,9 +2510,9 @@ function scheduleFundSplitsIfNeeded(ctx: ModuleCtx): void {
   for (let rank = 0; rank < sortedFunds.length; rank += 1) {
     const fundRow = sortedFunds[rank]!;
     if (findPendingFundSplit(ctx, fundRow.symbol)) continue;
-    if (!shouldScheduleFundSplit(fundRow.priceCents, affordableCount, rank)) continue;
+    if (!shouldScheduleShareSplit(fundRow.priceCents, affordableCount, rank)) continue;
 
-    const plan = planFundSplit(fundRow.symbol, fundRow.priceCents, seed + BigInt(rank));
+    const plan = planShareSplit(fundRow.symbol, fundRow.priceCents, seed + BigInt(rank));
     if (!plan || plan.splitRatio <= 1n) continue;
 
     ctx.db.fundSplitPending.insert({
@@ -2392,7 +2520,41 @@ function scheduleFundSplitsIfNeeded(ctx: ModuleCtx): void {
       fundSymbol: fundRow.symbol,
       fundName: fundRow.name,
       splitRatio: plan.splitRatio,
-      executeAtMicros: ctx.timestamp.microsSinceUnixEpoch + FUND_SPLIT_LEAD_MICROS,
+      executeAtMicros: ctx.timestamp.microsSinceUnixEpoch + SPLIT_LEAD_MICROS,
+      announced: false,
+      createdAt: ctx.timestamp,
+    });
+    requestPromptNewsCheck(ctx);
+  }
+}
+
+function scheduleStockSplitsIfNeeded(ctx: ModuleCtx): void {
+  const affordableCount = countAffordableStocks(ctx);
+  const seed = ctx.timestamp.microsSinceUnixEpoch;
+  const sortedStocks = [...ctx.db.stock.iter()].sort((left, right) => {
+    if (right.priceCents > left.priceCents) return 1;
+    if (right.priceCents < left.priceCents) return -1;
+    return left.symbol.localeCompare(right.symbol);
+  });
+
+  for (let rank = 0; rank < sortedStocks.length; rank += 1) {
+    const stockRow = sortedStocks[rank]!;
+    if (findPendingStockSplit(ctx, stockRow.symbol)) continue;
+    if (!shouldScheduleShareSplit(stockRow.priceCents, affordableCount, rank)) continue;
+
+    const plan = planShareSplit(
+      stockRow.symbol,
+      stockRow.priceCents,
+      seed + BigInt(rank) + 1_000n
+    );
+    if (!plan || plan.splitRatio <= 1n) continue;
+
+    ctx.db.stockSplitPending.insert({
+      id: 0n,
+      stockSymbol: stockRow.symbol,
+      stockName: stockRow.name,
+      splitRatio: plan.splitRatio,
+      executeAtMicros: ctx.timestamp.microsSinceUnixEpoch + SPLIT_LEAD_MICROS,
       announced: false,
       createdAt: ctx.timestamp,
     });
@@ -2402,16 +2564,64 @@ function scheduleFundSplitsIfNeeded(ctx: ModuleCtx): void {
 
 function processDueFundSplits(ctx: ModuleCtx): void {
   const nowMicros = ctx.timestamp.microsSinceUnixEpoch;
-  for (const pending of [...ctx.db.fundSplitPending.iter()]) {
+  for (const row of [...ctx.db.fundSplitPending.iter()]) {
+    const pending: PendingSplit = {
+      kind: 'fund',
+      id: row.id,
+      symbol: row.fundSymbol,
+      displayName: row.fundName,
+      splitRatio: row.splitRatio,
+      executeAtMicros: row.executeAtMicros,
+      announced: row.announced,
+    };
     if (!pending.announced) {
       if (!getGlobalAiConfig(ctx)) {
-        announcePendingFundSplitTemplate(ctx, pending);
+        announcePendingSplitTemplate(ctx, pending);
       }
       continue;
     }
     if (pending.executeAtMicros > nowMicros) continue;
     executeFundShareSplit(ctx, pending);
   }
+}
+
+function processDueStockSplits(ctx: ModuleCtx): void {
+  const nowMicros = ctx.timestamp.microsSinceUnixEpoch;
+  for (const row of [...ctx.db.stockSplitPending.iter()]) {
+    const pending: PendingSplit = {
+      kind: 'stock',
+      id: row.id,
+      symbol: row.stockSymbol,
+      displayName: row.stockName,
+      splitRatio: row.splitRatio,
+      executeAtMicros: row.executeAtMicros,
+      announced: row.announced,
+    };
+    if (!pending.announced) {
+      if (!getGlobalAiConfig(ctx)) {
+        announcePendingSplitTemplate(ctx, pending);
+      }
+      continue;
+    }
+    if (pending.executeAtMicros > nowMicros) continue;
+    executeStockShareSplit(ctx, pending);
+  }
+}
+
+function formatPendingSplitLine(
+  ctx: ModuleCtx,
+  label: string,
+  symbol: string,
+  splitRatio: bigint,
+  executeAtMicros: bigint,
+  currentPrice: bigint
+): string {
+  const projected = projectedPriceAfterSplit(currentPrice, splitRatio);
+  const secondsLeft =
+    executeAtMicros > ctx.timestamp.microsSinceUnixEpoch
+      ? (executeAtMicros - ctx.timestamp.microsSinceUnixEpoch + 999_999n) / 1_000_000n
+      : 0n;
+  return `${label} (${symbol}): ${splitRatio.toString()}-for-1 split pending in ~${secondsLeft.toString()}s ($${centsToDollarString(currentPrice)} -> ~$${centsToDollarString(projected)})`;
 }
 
 function buildAutoNewsContext(ctx: ModuleCtx): string {
@@ -2433,17 +2643,34 @@ function buildAutoNewsContext(ctx: ModuleCtx): string {
     .slice(0, 3)
     .map(row => `${row.isAiGenerated ? 'AI' : 'Desk'}: ${row.headline}`);
 
-  const pendingSplits = [...ctx.db.fundSplitPending.iter()]
+  const pendingFundSplits = [...ctx.db.fundSplitPending.iter()]
     .filter(row => !row.announced)
     .map(row => {
       const fundRow = ctx.db.fund.symbol.find(row.fundSymbol);
       const currentPrice = fundRow?.priceCents ?? 0n;
-      const projected = projectedPriceAfterSplit(currentPrice, row.splitRatio);
-      const secondsLeft =
-        row.executeAtMicros > ctx.timestamp.microsSinceUnixEpoch
-          ? (row.executeAtMicros - ctx.timestamp.microsSinceUnixEpoch + 999_999n) / 1_000_000n
-          : 0n;
-      return `${row.fundName} (${row.fundSymbol}): ${row.splitRatio.toString()}-for-1 split pending in ~${secondsLeft.toString()}s ($${centsToDollarString(currentPrice)} -> ~$${centsToDollarString(projected)})`;
+      return formatPendingSplitLine(
+        ctx,
+        row.fundName,
+        row.fundSymbol,
+        row.splitRatio,
+        row.executeAtMicros,
+        currentPrice
+      );
+    });
+
+  const pendingStockSplits = [...ctx.db.stockSplitPending.iter()]
+    .filter(row => !row.announced)
+    .map(row => {
+      const stockRow = ctx.db.stock.symbol.find(row.stockSymbol);
+      const currentPrice = stockRow?.priceCents ?? 0n;
+      return formatPendingSplitLine(
+        ctx,
+        row.stockName,
+        row.stockSymbol,
+        row.splitRatio,
+        row.executeAtMicros,
+        currentPrice
+      );
     });
 
   const lines = [
@@ -2456,7 +2683,10 @@ function buildAutoNewsContext(ctx: ModuleCtx): string {
     ...(tape.length > 0 ? tape : ['(no recent trades)']),
     '',
     'Pending fund share splits awaiting announcement:',
-    ...(pendingSplits.length > 0 ? pendingSplits : ['(none)']),
+    ...(pendingFundSplits.length > 0 ? pendingFundSplits : ['(none)']),
+    '',
+    'Pending stock splits awaiting announcement:',
+    ...(pendingStockSplits.length > 0 ? pendingStockSplits : ['(none)']),
     '',
     'Recent headlines already published:',
     ...(lastNews.length > 0 ? lastNews : ['(none yet)']),
@@ -3366,7 +3596,9 @@ export const market_tick = spacetimedb.reducer(
     rollAllStockTradingDays(ctx);
     refreshAllFundPrices(ctx);
     scheduleFundSplitsIfNeeded(ctx);
+    scheduleStockSplitsIfNeeded(ctx);
     processDueFundSplits(ctx);
+    processDueStockSplits(ctx);
     snapshotAllPortfolios(ctx);
   }
 );
@@ -3432,10 +3664,15 @@ export const ai_market_news_tick = spacetimedb.procedure(
     if (!AI_AUTO_NEWS_ENABLED) return {};
 
     const setup = ctx.withTx(tx => {
-      const pendingSplit = [...tx.db.fundSplitPending.iter()].find(row => !row.announced);
-      const fundRow = pendingSplit
-        ? tx.db.fund.symbol.find(pendingSplit.fundSymbol)
-        : undefined;
+      const pendingSplit = findNextUnannouncedSplit(tx);
+      let currentPriceCents = 0n;
+      if (pendingSplit) {
+        if (pendingSplit.kind === 'fund') {
+          currentPriceCents = tx.db.fund.symbol.find(pendingSplit.symbol)?.priceCents ?? 0n;
+        } else {
+          currentPriceCents = tx.db.stock.symbol.find(pendingSplit.symbol)?.priceCents ?? 0n;
+        }
+      }
       const secondsUntilEffective =
         pendingSplit && pendingSplit.executeAtMicros > tx.timestamp.microsSinceUnixEpoch
           ? (pendingSplit.executeAtMicros - tx.timestamp.microsSinceUnixEpoch + 999_999n) /
@@ -3446,7 +3683,7 @@ export const ai_market_news_tick = spacetimedb.procedure(
         context: buildAutoNewsContext(tx),
         globalConfig: getGlobalAiConfig(tx),
         pendingSplit,
-        fundRow,
+        currentPriceCents,
         secondsUntilEffective,
       };
     });
@@ -3462,14 +3699,15 @@ export const ai_market_news_tick = spacetimedb.procedure(
     if (!provider) return {};
 
     const messages =
-      setup.pendingSplit && setup.fundRow
-        ? buildFundSplitAnnouncementMessages({
-            fundSymbol: setup.pendingSplit.fundSymbol,
-            fundName: setup.pendingSplit.fundName,
+      setup.pendingSplit && setup.currentPriceCents > 0n
+        ? buildSplitAnnouncementMessages({
+            kind: setup.pendingSplit.kind,
+            symbol: setup.pendingSplit.symbol,
+            displayName: setup.pendingSplit.displayName,
             splitRatio: setup.pendingSplit.splitRatio,
-            currentPriceCents: setup.fundRow.priceCents,
+            currentPriceCents: setup.currentPriceCents,
             projectedPriceCents: projectedPriceAfterSplit(
-              setup.fundRow.priceCents,
+              setup.currentPriceCents,
               setup.pendingSplit.splitRatio
             ),
             secondsUntilEffective: setup.secondsUntilEffective,
@@ -3478,7 +3716,7 @@ export const ai_market_news_tick = spacetimedb.procedure(
 
     debugGenerateNews(
       setup.pendingSplit
-        ? `auto news split announcement ${setup.pendingSplit.fundSymbol}`
+        ? `auto news split announcement ${setup.pendingSplit.symbol}`
         : `auto news tick provider=${config.provider}`
     );
     const result = callChat(ctx.http, provider, {
@@ -3511,13 +3749,19 @@ export const ai_market_news_tick = spacetimedb.procedure(
 
     ctx.withTx(tx => {
       setSchedulerState(tx, 'auto_news', false, '');
-      if (setup.pendingSplit && setup.fundRow) {
+      if (setup.pendingSplit && setup.currentPriceCents > 0n) {
         if (decision.publish) {
-          insertMarketNewsRow(tx, decision.headline, decision.body, undefined, true);
-          markFundSplitAnnounced(tx, setup.pendingSplit.id);
+          insertMarketNewsRow(
+            tx,
+            decision.headline,
+            decision.body,
+            splitNewsSymbol(setup.pendingSplit.kind, setup.pendingSplit.symbol),
+            true
+          );
+          markSplitAnnounced(tx, setup.pendingSplit);
           debugGenerateNews(`auto news split announced: ${decision.headline}`);
         } else {
-          announcePendingFundSplitTemplate(tx, setup.pendingSplit);
+          announcePendingSplitTemplate(tx, setup.pendingSplit);
           debugGenerateNews('auto news split fallback template published');
         }
         scheduleTimerAfter(tx, 15_000_000n, 'news');
