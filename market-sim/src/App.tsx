@@ -12,6 +12,7 @@ import {
 } from './components/FundConstituentsPanel';
 import { FundMarketTable, type FundMarketItem } from './components/FundMarketTable';
 import { LeaderboardPanel, sortLeaderboard } from './components/LeaderboardPanel';
+import { InstitutionalFlow } from './components/InstitutionalFlow';
 import { ManagerActivity } from './components/ManagerActivity';
 import { MarketClockBanner } from './components/MarketClockBanner';
 import {
@@ -95,6 +96,7 @@ function App() {
   const [newsItems] = useTable(tables.recent_market_news);
   const [portfolioHistory] = useTable(tables.my_portfolio_history);
   const [managerTrades] = useTable(tables.ai_trader_log);
+  const [institutionalFlows] = useTable(tables.institutional_flow_log);
   const [managerMinds] = useTable(tables.ai_trader_minds);
   const [marketClockRows] = useTable(tables.market_clock);
   const [dailyPredictions] = useTable(tables.my_daily_prediction);
@@ -707,7 +709,10 @@ function App() {
         />
       </section>
 
-      <ManagerActivity minds={managerMinds} trades={[...managerTrades].reverse()} />
+      <section className="activity-grid">
+        <ManagerActivity minds={managerMinds} trades={[...managerTrades].reverse()} />
+        <InstitutionalFlow flows={[...institutionalFlows].reverse()} />
+      </section>
     </main>
   );
 }

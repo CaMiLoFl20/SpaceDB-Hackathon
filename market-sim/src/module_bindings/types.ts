@@ -210,6 +210,17 @@ export const FundMarketRow = __t.object("FundMarketRow", {
 });
 export type FundMarketRow = __Infer<typeof FundMarketRow>;
 
+export const FundSplitPending = __t.object("FundSplitPending", {
+  id: __t.u64(),
+  fundSymbol: __t.string(),
+  fundName: __t.string(),
+  splitRatio: __t.u64(),
+  executeAtMicros: __t.i64(),
+  announced: __t.bool(),
+  createdAt: __t.timestamp(),
+});
+export type FundSplitPending = __Infer<typeof FundSplitPending>;
+
 export const FundTradeLedger = __t.object("FundTradeLedger", {
   id: __t.u64(),
   owner: __t.identity(),
@@ -294,6 +305,35 @@ export const Holding = __t.object("Holding", {
   updatedAt: __t.timestamp(),
 });
 export type Holding = __Infer<typeof Holding>;
+
+export const InstitutionalFlow = __t.object("InstitutionalFlow", {
+  id: __t.u64(),
+  institution: __t.string(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  totalCents: __t.u64(),
+  behavior: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type InstitutionalFlow = __Infer<typeof InstitutionalFlow>;
+
+export const InstitutionalFlowLog = __t.object("InstitutionalFlowLog", {});
+export type InstitutionalFlowLog = __Infer<typeof InstitutionalFlowLog>;
+
+export const InstitutionalFlowLogRow = __t.object("InstitutionalFlowLogRow", {
+  id: __t.u64(),
+  institution: __t.string(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64(),
+  totalCents: __t.u64(),
+  behavior: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type InstitutionalFlowLogRow = __Infer<typeof InstitutionalFlowLogRow>;
 
 export const KeyArticle = __t.object("KeyArticle", {
   id: __t.u64(),
@@ -399,6 +439,7 @@ export const MarketNews = __t.object("MarketNews", {
   symbol: __t.option(__t.string()),
   createdAt: __t.timestamp(),
   isAiGenerated: __t.bool(),
+  newsKind: __t.string(),
 });
 export type MarketNews = __Infer<typeof MarketNews>;
 
@@ -496,6 +537,17 @@ export const Stock = __t.object("Stock", {
   updatedAt: __t.timestamp(),
 });
 export type Stock = __Infer<typeof Stock>;
+
+export const StockSplitPending = __t.object("StockSplitPending", {
+  id: __t.u64(),
+  stockSymbol: __t.string(),
+  stockName: __t.string(),
+  splitRatio: __t.u64(),
+  executeAtMicros: __t.i64(),
+  announced: __t.bool(),
+  createdAt: __t.timestamp(),
+});
+export type StockSplitPending = __Infer<typeof StockSplitPending>;
 
 export const TickTimer = __t.object("TickTimer", {
   scheduledId: __t.u64(),

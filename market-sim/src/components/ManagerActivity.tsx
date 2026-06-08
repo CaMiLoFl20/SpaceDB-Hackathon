@@ -25,6 +25,7 @@ export function ManagerActivity({
   return (
     <article className="panel manager-panel">
       <h2>Fund manager tape</h2>
+      <p className="muted">Live stock trades from Cedar, Harbor, and Apex — usually small lots.</p>
       <div className="manager-grid">
         {minds.map(mind => (
           <div className="manager-card" key={mind.traderName}>

@@ -60,8 +60,11 @@ import AiTraderLogRow from "./ai_trader_log_table";
 import AiTraderMindsRow from "./ai_trader_minds_table";
 import DaySummaryRow from "./day_summary_table";
 import FundRow from "./fund_table";
+import FundSplitPendingRow from "./fund_split_pending_table";
 import FundConstituentsRow from "./fund_constituents_table";
 import GithubProfileRow from "./github_profile_table";
+import InstitutionalFlowRow from "./institutional_flow_table";
+import InstitutionalFlowLogRow from "./institutional_flow_log_table";
 import KeyArticleRow from "./key_article_table";
 import LatestDaySummaryRow from "./latest_day_summary_table";
 import LeaderboardRow from "./leaderboard_table";
@@ -84,6 +87,7 @@ import PredictionResultsRow from "./prediction_results_table";
 import RecentTradeRow from "./recent_trade_table";
 import RecentMarketNewsRow from "./recent_market_news_table";
 import StockRow from "./stock_table";
+import StockSplitPendingRow from "./stock_split_pending_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -117,6 +121,21 @@ const tablesSchema = __schema({
       { name: 'fund_symbol_key', constraint: 'unique', columns: ['symbol'] },
     ],
   }, FundRow),
+  fundSplitPending: __table({
+    name: 'fund_split_pending',
+    indexes: [
+      { accessor: 'fundSymbol', name: 'fund_split_pending_fund_symbol_idx_btree', algorithm: 'btree', columns: [
+        'fundSymbol',
+      ] },
+      { accessor: 'id', name: 'fund_split_pending_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'fund_split_pending_fund_symbol_key', constraint: 'unique', columns: ['fundSymbol'] },
+      { name: 'fund_split_pending_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, FundSplitPendingRow),
   githubProfile: __table({
     name: 'github_profile',
     indexes: [
@@ -128,6 +147,17 @@ const tablesSchema = __schema({
       { name: 'github_profile_owner_key', constraint: 'unique', columns: ['owner'] },
     ],
   }, GithubProfileRow),
+  institutionalFlow: __table({
+    name: 'institutional_flow',
+    indexes: [
+      { accessor: 'id', name: 'institutional_flow_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'institutional_flow_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, InstitutionalFlowRow),
   keyArticle: __table({
     name: 'key_article',
     indexes: [
@@ -199,6 +229,21 @@ const tablesSchema = __schema({
       { name: 'stock_symbol_key', constraint: 'unique', columns: ['symbol'] },
     ],
   }, StockRow),
+  stockSplitPending: __table({
+    name: 'stock_split_pending',
+    indexes: [
+      { accessor: 'id', name: 'stock_split_pending_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'stockSymbol', name: 'stock_split_pending_stock_symbol_idx_btree', algorithm: 'btree', columns: [
+        'stockSymbol',
+      ] },
+    ],
+    constraints: [
+      { name: 'stock_split_pending_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'stock_split_pending_stock_symbol_key', constraint: 'unique', columns: ['stockSymbol'] },
+    ],
+  }, StockSplitPendingRow),
   ai_news_status: __table({
     name: 'ai_news_status',
     indexes: [
@@ -227,6 +272,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, FundConstituentsRow),
+  institutional_flow_log: __table({
+    name: 'institutional_flow_log',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, InstitutionalFlowLogRow),
   latest_day_summary: __table({
     name: 'latest_day_summary',
     indexes: [

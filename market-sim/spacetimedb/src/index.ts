@@ -317,6 +317,19 @@ const marketNewsRow = {
   symbol: t.string().optional(),
   createdAt: t.timestamp().index('btree'),
   isAiGenerated: t.bool(),
+  newsKind: t.string().default(''),
+};
+
+const institutionalFlowRow = {
+  id: t.u64().primaryKey().autoInc(),
+  institution: t.string(),
+  symbol: t.string(),
+  side: t.string(),
+  shares: t.u64(),
+  priceCents: t.u64(),
+  totalCents: t.u64(),
+  behavior: t.string(),
+  createdAt: t.timestamp(),
 };
 
 const fundSplitPendingRow = {
@@ -347,6 +360,7 @@ const playerDirectoryRow = {
 };
 
 const RECENT_MARKET_NEWS_LIMIT = 20;
+const INSTITUTIONAL_FLOW_LOG_LIMIT = 50;
 
 const portfolioSnapshotRow = {
   id: t.u64().primaryKey().autoInc(),
@@ -439,6 +453,18 @@ const aiTraderLogRow = t.object('AiTraderLogRow', {
   shares: t.u64(),
   priceCents: t.u64(),
   totalCents: t.u64(),
+  createdAt: t.timestamp(),
+});
+
+const institutionalFlowLogRow = t.object('InstitutionalFlowLogRow', {
+  id: t.u64(),
+  institution: t.string(),
+  symbol: t.string(),
+  side: t.string(),
+  shares: t.u64(),
+  priceCents: t.u64(),
+  totalCents: t.u64(),
+  behavior: t.string(),
   createdAt: t.timestamp(),
 });
 
@@ -573,6 +599,7 @@ const fundTradeLedger = table({ name: 'fund_trade_ledger' }, fundTradeLedgerRow)
 const tradeLedger = table({ name: 'trade_ledger' }, tradeLedgerRow);
 const recentTrade = table({ name: 'recent_trade', public: true }, recentTradeRow);
 const marketNews = table({ name: 'market_news', public: true }, marketNewsRow);
+const institutionalFlow = table({ name: 'institutional_flow', public: true }, institutionalFlowRow);
 const fundSplitPending = table({ name: 'fund_split_pending', public: true }, fundSplitPendingRow);
 const stockSplitPending = table({ name: 'stock_split_pending', public: true }, stockSplitPendingRow);
 const playerDirectory = table(
@@ -622,6 +649,7 @@ const spacetimedb = schema({
   tradeLedger,
   recentTrade,
   marketNews,
+  institutionalFlow,
   fundSplitPending,
   stockSplitPending,
   playerDirectory,
@@ -1723,11 +1751,34 @@ function insertAiNews(
 ): void {
   ctx.db.marketNews.insert({
     id: 0n,
-    headline: `AI Market Mover: ${headline}`,
+    headline,
     body,
     symbol,
     createdAt: ctx.timestamp,
     isAiGenerated: true,
+    newsKind: 'institutional',
+  });
+}
+
+function recordInstitutionalFlow(
+  ctx: ModuleCtx,
+  institution: string,
+  symbol: string,
+  side: 'buy' | 'sell',
+  shares: bigint,
+  priceCents: bigint,
+  behavior: string
+): void {
+  ctx.db.institutionalFlow.insert({
+    id: 0n,
+    institution,
+    symbol,
+    side,
+    shares,
+    priceCents,
+    totalCents: tradeTotalCents(priceCents, shares),
+    behavior,
+    createdAt: ctx.timestamp,
   });
 }
 
@@ -2003,6 +2054,15 @@ function executeInstitutionalBuy(
   behavior: BullishNewsBehavior,
   seed: bigint
 ): StockRow {
+  recordInstitutionalFlow(
+    ctx,
+    institution,
+    stockRow.symbol,
+    'buy',
+    shares,
+    stockRow.priceCents,
+    behavior
+  );
   const updated = applyMarketActivity(ctx, stockRow, 'buy', shares, shares);
   const copy = buildBullishNewsCopy(updated.symbol, institution, shares, behavior, seed);
   insertAiNews(ctx, copy.headline, copy.body, updated.symbol);
@@ -2017,6 +2077,15 @@ function executeInstitutionalSell(
   behavior: BearishNewsBehavior,
   seed: bigint
 ): StockRow {
+  recordInstitutionalFlow(
+    ctx,
+    institution,
+    stockRow.symbol,
+    'sell',
+    shares,
+    stockRow.priceCents,
+    behavior
+  );
   const updated = applyMarketActivity(ctx, stockRow, 'sell', shares, shares);
   const copy = buildBearishNewsCopy(updated.symbol, institution, shares, behavior, seed);
   insertAiNews(ctx, copy.headline, copy.body, updated.symbol);
@@ -2414,7 +2483,7 @@ function executeFundShareSplit(ctx: ModuleCtx, pending: PendingSplit): void {
     splitRatio: ratio,
     newPriceCents,
   });
-  insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true);
+  insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true, 'split');
   snapshotAllPortfolios(ctx);
 }
 
@@ -2459,7 +2528,7 @@ function executeStockShareSplit(ctx: ModuleCtx, pending: PendingSplit): void {
     splitRatio: ratio,
     newPriceCents,
   });
-  insertMarketNewsRow(ctx, copy.headline, copy.body, stockRow.symbol, true);
+  insertMarketNewsRow(ctx, copy.headline, copy.body, stockRow.symbol, true, 'split');
   snapshotAllPortfolios(ctx);
 }
 
@@ -2477,7 +2546,7 @@ function announcePendingSplitTemplate(ctx: ModuleCtx, pending: PendingSplit): vo
       splitRatio: pending.splitRatio,
       projectedPriceCents: projectedPriceAfterSplit(fundRow.priceCents, pending.splitRatio),
     });
-    insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true);
+    insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true, 'split');
     markSplitAnnounced(ctx, pending);
     return;
   }
@@ -2494,7 +2563,7 @@ function announcePendingSplitTemplate(ctx: ModuleCtx, pending: PendingSplit): vo
     splitRatio: pending.splitRatio,
     projectedPriceCents: projectedPriceAfterSplit(stockRow.priceCents, pending.splitRatio),
   });
-  insertMarketNewsRow(ctx, copy.headline, copy.body, stockRow.symbol, true);
+  insertMarketNewsRow(ctx, copy.headline, copy.body, stockRow.symbol, true, 'split');
   markSplitAnnounced(ctx, pending);
 }
 
@@ -3236,6 +3305,7 @@ function ensureMarketSeeded(ctx: SeedCtx): void {
       symbol: undefined,
       createdAt: now,
       isAiGenerated: false,
+      newsKind: 'welcome',
     });
   }
 }
@@ -3442,7 +3512,7 @@ function maybeCreateKeyArticleForDay(ctx: ModuleCtx, dayIndex: bigint): void {
     applied: true,
     createdAt: ctx.timestamp,
   });
-  insertMarketNewsRow(ctx, headline, body, updated.symbol, true);
+  insertMarketNewsRow(ctx, headline, body, updated.symbol, true, 'key_article');
   refreshAllFundPrices(ctx);
 }
 
@@ -3756,7 +3826,8 @@ export const ai_market_news_tick = spacetimedb.procedure(
             decision.headline,
             decision.body,
             splitNewsSymbol(setup.pendingSplit.kind, setup.pendingSplit.symbol),
-            true
+            true,
+            'split'
           );
           markSplitAnnounced(tx, setup.pendingSplit);
           debugGenerateNews(`auto news split announced: ${decision.headline}`);
@@ -3769,7 +3840,7 @@ export const ai_market_news_tick = spacetimedb.procedure(
       }
 
       if (decision.publish) {
-        insertMarketNewsRow(tx, decision.headline, decision.body, decision.symbol, true);
+        insertMarketNewsRow(tx, decision.headline, decision.body, decision.symbol, true, 'desk');
         debugGenerateNews(`auto news published: ${decision.headline}`);
         debugAiConnection(`auto news published via ${config.provider}`);
       } else {
@@ -4196,6 +4267,32 @@ export const ai_trader_log = spacetimedb.view(
           createdAt: trade.createdAt,
         };
       })
+);
+
+export const institutional_flow_log = spacetimedb.view(
+  { name: 'institutional_flow_log', public: true },
+  t.array(institutionalFlowLogRow),
+  ctx =>
+    [...ctx.db.institutionalFlow.iter()]
+      .sort((left, right) => {
+        const diff =
+          right.createdAt.microsSinceUnixEpoch - left.createdAt.microsSinceUnixEpoch;
+        if (diff > 0n) return 1;
+        if (diff < 0n) return -1;
+        return 0;
+      })
+      .slice(0, INSTITUTIONAL_FLOW_LOG_LIMIT)
+      .map(flow => ({
+        id: flow.id,
+        institution: flow.institution,
+        symbol: flow.symbol,
+        side: flow.side,
+        shares: flow.shares,
+        priceCents: flow.priceCents,
+        totalCents: flow.totalCents,
+        behavior: flow.behavior,
+        createdAt: flow.createdAt,
+      }))
 );
 
 export const leaderboard = spacetimedb.view(
@@ -4783,7 +4880,8 @@ function insertMarketNewsRow(
   headline: string,
   body: string,
   symbol: string | undefined,
-  isAiGenerated: boolean
+  isAiGenerated: boolean,
+  newsKind: string = 'desk'
 ): void {
   ctx.db.marketNews.insert({
     id: 0n,
@@ -4792,7 +4890,13 @@ function insertMarketNewsRow(
     symbol,
     createdAt: ctx.timestamp,
     isAiGenerated,
+    newsKind,
   });
+}
+
+function isInstitutionalNewsRow(row: { newsKind: string; headline: string }): boolean {
+  if (row.newsKind === 'institutional') return true;
+  return row.headline.startsWith('AI Market Mover:');
 }
 
 function collectRecentMarketActivity(ctx: ModuleCtx, limit: number): string[] {
@@ -4812,7 +4916,7 @@ function collectRecentMarketActivity(ctx: ModuleCtx, limit: number): string[] {
 
 function collectInstitutionalContext(ctx: ModuleCtx, limit: number): string[] {
   const rows = [...ctx.db.marketNews.iter()]
-    .filter(row => row.headline.startsWith('AI Market Mover:'))
+    .filter(row => isInstitutionalNewsRow(row))
     .sort((left, right) => {
       const diff =
         right.createdAt.microsSinceUnixEpoch - left.createdAt.microsSinceUnixEpoch;
@@ -5016,7 +5120,8 @@ export const generate_demo_news = spacetimedb.procedure(
         parsed.headline,
         parsed.body,
         setup.linkedSymbol,
-        true
+        true,
+        'manual'
       );
     });
 

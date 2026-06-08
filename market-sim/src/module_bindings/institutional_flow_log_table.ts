@@ -11,11 +11,13 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.u64().primaryKey(),
-  headline: __t.string(),
-  body: __t.string(),
-  symbol: __t.option(__t.string()),
+  id: __t.u64(),
+  institution: __t.string(),
+  symbol: __t.string(),
+  side: __t.string(),
+  shares: __t.u64(),
+  priceCents: __t.u64().name("price_cents"),
+  totalCents: __t.u64().name("total_cents"),
+  behavior: __t.string(),
   createdAt: __t.timestamp().name("created_at"),
-  isAiGenerated: __t.bool().name("is_ai_generated"),
-  newsKind: __t.string().name("news_kind"),
 });

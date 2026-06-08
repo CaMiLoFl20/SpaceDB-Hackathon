@@ -12,10 +12,10 @@ import {
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  headline: __t.string(),
-  body: __t.string(),
-  symbol: __t.option(__t.string()),
+  stockSymbol: __t.string().name("stock_symbol"),
+  stockName: __t.string().name("stock_name"),
+  splitRatio: __t.u64().name("split_ratio"),
+  executeAtMicros: __t.i64().name("execute_at_micros"),
+  announced: __t.bool(),
   createdAt: __t.timestamp().name("created_at"),
-  isAiGenerated: __t.bool().name("is_ai_generated"),
-  newsKind: __t.string().name("news_kind"),
 });

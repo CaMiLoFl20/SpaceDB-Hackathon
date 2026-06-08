@@ -17,4 +17,5 @@ export default __t.row({
   symbol: __t.option(__t.string()),
   createdAt: __t.timestamp().name("created_at"),
   isAiGenerated: __t.bool().name("is_ai_generated"),
+  newsKind: __t.string().name("news_kind"),
 });

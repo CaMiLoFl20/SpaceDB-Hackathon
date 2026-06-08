@@ -1,4 +1,10 @@
 import { optionalString } from '../utils/finance';
+import {
+  displayNewsHeadline,
+  newsKindClass,
+  newsKindLabel,
+  resolveNewsKind,
+} from '../utils/newsKind';
 import type { KeyArticleItem } from './MarketPulseStrip';
 
 export function NewsFeed({
@@ -15,6 +21,7 @@ export function NewsFeed({
     headline: string;
     body: string;
     symbol: unknown;
+    newsKind?: unknown;
     createdAt: { toDate: () => Date };
     isAiGenerated: boolean;
   }[];
@@ -35,7 +42,10 @@ export function NewsFeed({
           </button>
         )}
       </div>
-      <p className="muted">News reacts to trades and price moves. Player names and manager identities stay hidden.</p>
+      <p className="muted">
+        Stories are tagged by source. <strong>Market flow</strong> matches the institutional tape below;
+        fund manager trades appear separately.
+      </p>
       {!configured && <p className="error-text">Auto news is off. Add an OpenAI or OpenRouter key in AI Settings.</p>}
       {failedMessage && <p className="error-text">{failedMessage}</p>}
       {keyArticle && (
@@ -53,9 +63,16 @@ export function NewsFeed({
         <ul className="news-list">
           {news.map(item => {
             const symbol = optionalString(item.symbol);
+            const kind = resolveNewsKind(item.newsKind, item.headline);
+            const label = newsKindLabel(kind);
             return (
               <li key={item.id.toString()}>
-                <strong>{item.headline.replace(/^AI Market Mover:\s*/i, '')}</strong>
+                <div className="news-item-header">
+                  {label && (
+                    <span className={`news-badge ${newsKindClass(kind)}`}>{label}</span>
+                  )}
+                  <strong>{displayNewsHeadline(item.headline)}</strong>
+                </div>
                 <p>{item.body}</p>
                 <time className="muted">
                   {item.createdAt.toDate().toLocaleString()}
