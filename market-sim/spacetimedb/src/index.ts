@@ -12,11 +12,13 @@ import {
   parseAutoNewsLlmResponse,
 } from './ai_market_news';
 import {
+  affordableShareCount,
   buildFundSplitAnnouncementMessages,
-  computeFundSplitRatio,
-  FUND_SPLIT_LEAD_MICROS,
-  FUND_SPLIT_TRIGGER_PRICE_CENTS,
+  MIN_AFFORDABLE_SHARES,
+  planFundSplit,
   projectedPriceAfterSplit,
+  shouldScheduleFundSplit,
+  FUND_SPLIT_LEAD_MICROS,
   templateFundSplitAnnouncement,
 } from './fund_split';
 import {
@@ -2273,6 +2275,22 @@ type FundSplitPending = {
   announced: boolean;
 };
 
+function countAffordableFunds(ctx: Pick<ModuleCtx, 'db'>): number {
+  let count = 0;
+  for (const fundRow of ctx.db.fund.iter()) {
+    if (affordableShareCount(STARTING_BALANCE_CENTS, fundRow.priceCents) >= MIN_AFFORDABLE_SHARES) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function scaleSplitPrice(price: bigint, ratio: bigint): bigint {
+  if (ratio <= 1n) return price;
+  const scaled = price / ratio;
+  return scaled > 0n ? scaled : 1n;
+}
+
 function markFundSplitAnnounced(ctx: ModuleCtx, pendingId: bigint): void {
   const row = ctx.db.fundSplitPending.id.find(pendingId);
   if (!row) return;
@@ -2295,6 +2313,11 @@ function executeFundShareSplit(ctx: ModuleCtx, pending: FundSplitPending): void 
     return;
   }
 
+  if (fundRow.totalShares > MAX_U64 / ratio || fundRow.availableShares > MAX_U64 / ratio) {
+    ctx.db.fundSplitPending.id.delete(pending.id);
+    return;
+  }
+
   for (const holding of ctx.db.fundHolding.iter()) {
     if (holding.symbol !== fundRow.symbol) continue;
     if (holding.shares > MAX_U64 / ratio) continue;
@@ -2308,18 +2331,14 @@ function executeFundShareSplit(ctx: ModuleCtx, pending: FundSplitPending): void 
   const newTotalShares = fundRow.totalShares * ratio;
   const newAvailableShares = fundRow.availableShares * ratio;
   const newPriceCents = computeFundSharePriceCents(fundRow.navCents, newTotalShares);
-  const scalePrice = (price: bigint) => {
-    const scaled = price / ratio;
-    return scaled > 0n ? scaled : 1n;
-  };
 
   ctx.db.fund.symbol.update({
     ...fundRow,
     totalShares: newTotalShares,
     availableShares: newAvailableShares,
     priceCents: newPriceCents,
-    previousPriceCents: scalePrice(fundRow.previousPriceCents),
-    dayOpenPriceCents: scalePrice(fundRow.dayOpenPriceCents),
+    previousPriceCents: scaleSplitPrice(fundRow.previousPriceCents, ratio),
+    dayOpenPriceCents: scaleSplitPrice(fundRow.dayOpenPriceCents, ratio),
     updatedAt: ctx.timestamp,
   });
 
@@ -2327,7 +2346,7 @@ function executeFundShareSplit(ctx: ModuleCtx, pending: FundSplitPending): void 
   insertMarketNewsRow(
     ctx,
     `${fundRow.name} (${fundRow.symbol}) completes ${ratio.toString()}-for-1 share split`,
-    `The split is now effective. Fund shares are trading near $${centsToDollarString(newPriceCents)}. Existing holders received additional shares; portfolio value is unchanged.`,
+    `The split is now effective at $${centsToDollarString(newPriceCents)} per share. All shareholders received ${ratio.toString()} shares for every share held; portfolio value is unchanged.`,
     undefined,
     true
   );
@@ -2341,30 +2360,38 @@ function announcePendingFundSplitTemplate(ctx: ModuleCtx, pending: FundSplitPend
     return;
   }
 
-  const projected = projectedPriceAfterSplit(fundRow.priceCents, pending.splitRatio);
   const copy = templateFundSplitAnnouncement({
     fundSymbol: pending.fundSymbol,
     fundName: pending.fundName,
     splitRatio: pending.splitRatio,
-    projectedPriceCents: projected,
+    projectedPriceCents: projectedPriceAfterSplit(fundRow.priceCents, pending.splitRatio),
   });
   insertMarketNewsRow(ctx, copy.headline, copy.body, undefined, true);
   markFundSplitAnnounced(ctx, pending.id);
 }
 
 function scheduleFundSplitsIfNeeded(ctx: ModuleCtx): void {
-  for (const fundRow of ctx.db.fund.iter()) {
-    if (fundRow.priceCents <= FUND_SPLIT_TRIGGER_PRICE_CENTS) continue;
-    if (findPendingFundSplit(ctx, fundRow.symbol)) continue;
+  const affordableCount = countAffordableFunds(ctx);
+  const seed = ctx.timestamp.microsSinceUnixEpoch;
+  const sortedFunds = [...ctx.db.fund.iter()].sort((left, right) => {
+    if (right.priceCents > left.priceCents) return 1;
+    if (right.priceCents < left.priceCents) return -1;
+    return left.symbol.localeCompare(right.symbol);
+  });
 
-    const splitRatio = computeFundSplitRatio(fundRow.priceCents);
-    if (splitRatio <= 1n) continue;
+  for (let rank = 0; rank < sortedFunds.length; rank += 1) {
+    const fundRow = sortedFunds[rank]!;
+    if (findPendingFundSplit(ctx, fundRow.symbol)) continue;
+    if (!shouldScheduleFundSplit(fundRow.priceCents, affordableCount, rank)) continue;
+
+    const plan = planFundSplit(fundRow.symbol, fundRow.priceCents, seed + BigInt(rank));
+    if (!plan || plan.splitRatio <= 1n) continue;
 
     ctx.db.fundSplitPending.insert({
       id: 0n,
       fundSymbol: fundRow.symbol,
       fundName: fundRow.name,
-      splitRatio,
+      splitRatio: plan.splitRatio,
       executeAtMicros: ctx.timestamp.microsSinceUnixEpoch + FUND_SPLIT_LEAD_MICROS,
       announced: false,
       createdAt: ctx.timestamp,
